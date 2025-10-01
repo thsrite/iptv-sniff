@@ -1,0 +1,1774 @@
+import os
+import json
+import subprocess
+import threading
+import time
+import copy
+import base64
+import requests
+from datetime import datetime
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
+import uuid
+
+app = Flask(__name__)
+CORS(app)
+
+# Configuration
+SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
+CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+RESULTS_FILE = os.path.join(CONFIG_DIR, 'results.json')
+CHANNELS_FILE = os.path.join(CONFIG_DIR, 'channels.json')
+GROUPS_FILE = os.path.join(CONFIG_DIR, 'groups.json')
+
+# Ensure directories exist
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+# Global state - using regular dicts without locks for reads
+# Only lock during file writes
+test_results = {}
+tv_channels = {}  # Store successful channels
+groups = {}  # Store channel groups
+file_write_lock = threading.Lock()  # Only for file writing
+current_test_id = None
+
+
+
+def load_config():
+    """Load all configuration from file"""
+    default_config = {}
+
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return default_config
+    return default_config
+
+
+def save_config(config):
+    """Save configuration to file"""
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def load_channels():
+    """Load TV channels from file"""
+    global tv_channels
+    if os.path.exists(CHANNELS_FILE):
+        try:
+            with open(CHANNELS_FILE, 'r', encoding='utf-8') as f:
+                tv_channels = json.load(f)
+        except:
+            tv_channels = {}
+    return tv_channels
+
+
+def save_channels():
+    """Save TV channels to file"""
+    try:
+        with file_write_lock:
+            with open(CHANNELS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(copy.deepcopy(tv_channels), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error saving channels: {str(e)}")
+
+
+def parse_m3u(content):
+    """Parse M3U content and extract channel information"""
+    import re
+
+    channels = []
+    lines = content.strip().split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Look for #EXTINF lines
+        if line.startswith('#EXTINF:'):
+            # Extract attributes from EXTINF line
+            tvg_id = ''
+            group_title = ''
+            tvg_logo = ''
+            catchup = ''
+            catchup_source = ''
+            channel_name = ''
+
+            # Extract tvg-id
+            tvg_id_match = re.search(r'tvg-id="([^"]*)"', line)
+            if tvg_id_match:
+                tvg_id = tvg_id_match.group(1)
+
+            # Extract group-title
+            group_match = re.search(r'group-title="([^"]*)"', line)
+            if group_match:
+                group_title = group_match.group(1)
+
+            # Extract tvg-logo
+            logo_match = re.search(r'tvg-logo="([^"]*)"', line)
+            if logo_match:
+                tvg_logo = logo_match.group(1)
+
+            # Extract catchup
+            catchup_match = re.search(r'catchup="([^"]*)"', line)
+            if catchup_match:
+                catchup = catchup_match.group(1)
+
+            # Extract catchup-source
+            catchup_source_match = re.search(r'catchup-source="([^"]*)"', line)
+            if catchup_source_match:
+                catchup_source = catchup_source_match.group(1)
+
+            # Extract channel name (text after last comma)
+            comma_pos = line.rfind(',')
+            if comma_pos != -1:
+                channel_name = line[comma_pos + 1:].strip()
+
+            # Get URL from next line
+            i += 1
+            if i < len(lines):
+                url = lines[i].strip()
+
+                # Skip empty lines or comments
+                while i < len(lines) and (not url or url.startswith('#')):
+                    i += 1
+                    if i < len(lines):
+                        url = lines[i].strip()
+
+                if url and not url.startswith('#'):
+                    # Extract IP from URL
+                    # Pattern: rtp://239.253.248.77:8000 or http://192.168.3.2:7788/rtp/239.253.248.77:8000
+                    ip_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)', url)
+                    if ip_match:
+                        # Use the last IP found in URL (the actual stream IP)
+                        all_ips = re.findall(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', url)
+                        if all_ips:
+                            ip = all_ips[-1]  # Use the last IP (stream IP, not proxy IP)
+
+                            channels.append({
+                                'ip': ip,
+                                'name': channel_name,
+                                'tvg_id': tvg_id,
+                                'url': url,
+                                'group': group_title,
+                                'logo': tvg_logo,
+                                'catchup': catchup,
+                                'playback': catchup_source
+                            })
+
+        i += 1
+
+    return channels
+
+
+def update_channel_library(ip, result):
+    """Update channel library with test result (both successful and failed)"""
+    global tv_channels
+
+    # No lock needed for dictionary update - Python GIL handles this
+    # Update or add channel (newer result overwrites older)
+    # Preserve existing name if channel exists and has a name
+    existing_name = ''
+    if ip in tv_channels:
+        # Channel exists, preserve its name (even if empty)
+        existing_name = tv_channels[ip].get('name', '')
+
+    # Preserve existing fields if channel exists
+    if ip in tv_channels:
+        existing_group = tv_channels[ip].get('group', '')
+        existing_logo = tv_channels[ip].get('logo', '')
+        existing_playback = tv_channels[ip].get('playback', '')
+        existing_tvg_id = tv_channels[ip].get('tvg_id', '')
+        existing_catchup = tv_channels[ip].get('catchup', '')
+    else:
+        existing_group = ''
+        existing_logo = ''
+        existing_playback = ''
+        existing_tvg_id = ''
+        existing_catchup = ''
+
+    # Save both successful and failed tests
+    test_status = result.get('status', 'unknown')
+
+    # Set connectivity based on test status
+    # - 'online': test passed
+    # - 'failed': test failed from stream test
+    # - 'offline': previously passed but now fails (will be set by connectivity test)
+    # - 'untested': imported channels without testing
+    if test_status == 'success':
+        connectivity = 'online'
+    elif test_status == 'failed':
+        connectivity = 'failed'
+    else:
+        connectivity = 'untested'
+
+    tv_channels[ip] = {
+        'name': existing_name,  # Will be empty string for new channels, preserved for existing
+        'url': result.get('url', ''),
+        'screenshot': result.get('screenshot', ''),
+        'timestamp': result.get('timestamp', datetime.now().isoformat()),
+        'resolution': result.get('resolution', ''),
+        'test_status': test_status,  # Track if test succeeded or failed
+        'connectivity': connectivity,  # Set based on test result
+        'group': existing_group,
+        'logo': existing_logo,
+        'playback': existing_playback,
+        'tvg_id': existing_tvg_id,
+        'catchup': existing_catchup
+    }
+    save_channels()
+
+
+def load_results():
+    """Load test results from file"""
+    if os.path.exists(RESULTS_FILE):
+        try:
+            with open(RESULTS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_results():
+    """Save test results to file - only lock during actual file write"""
+    try:
+        # Only lock the actual file write operation
+        with file_write_lock:
+            with open(RESULTS_FILE, 'w', encoding='utf-8') as f:
+                # Make a copy to avoid issues during serialization
+                json.dump(copy.deepcopy(test_results), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in save_results: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
+def test_iptv_stream(base_url, ip, test_id, config, is_retry=False):
+    """Test a single IPTV stream using FFmpeg"""
+    global test_results  # Declare global at the beginning of function
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] test_iptv_stream called: ip={ip}, is_retry={is_retry}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] base_url template: {base_url}")
+
+    # Replace {ip} placeholder in base_url with actual IP
+    url = base_url.replace('{ip}', ip)
+    ip_key = ip
+
+    # Log the URL being tested
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {'='*50}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Testing Channel IP: {ip}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] URL: {url}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Mode: {'Retry' if is_retry else 'Initial Test'}")
+
+    result = {
+        "ip": ip,
+        "url": url,
+        "status": "testing",
+        "timestamp": datetime.now().isoformat(),
+        "screenshot": None,
+        "error": None
+    }
+
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Setting initial status for {ip}: {result['status']}")
+
+        # Check if test_id exists in test_results
+        if test_id not in test_results:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: test_id {test_id} not found in test_results, reloading from file")
+            # Try to reload from file
+            test_results = load_results()
+
+        if test_id not in test_results:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error: test_id {test_id} still not found after reload")
+            return
+
+        # Check if "results" key exists
+        if "results" not in test_results[test_id]:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Warning: 'results' key not found, creating it")
+            test_results[test_id]["results"] = {}
+
+        # No lock needed - Python's GIL handles dictionary updates atomically
+        test_results[test_id]["results"][ip_key] = result
+        # Save immediately to update UI
+        save_results()
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Initial 'testing' status saved for {ip}")
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error saving initial result: {str(e)}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] test_id: {test_id}, Available test_ids: {list(test_results.keys())}")
+        import traceback
+        traceback.print_exc()
+        return  # Exit the function if we can't save initial result
+
+    # Main try block with finally to ensure status update
+    try:
+        screenshot_path = os.path.join(SCREENSHOTS_DIR, f"{test_id}_{ip.replace('.', '_')}.jpg")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Screenshot path: {screenshot_path}")
+
+        # Build FFmpeg command
+        timeout = config.get("timeout") or 10  # Use 10 if timeout is None or empty
+        if isinstance(timeout, str):
+            try:
+                timeout = int(timeout)
+            except:
+                timeout = 10
+        custom_params = config.get("custom_params", "")
+
+        cmd = ["ffmpeg", "-y"]
+
+        # Add network timeout and analysis parameters BEFORE input
+        # These must come before -i flag
+        cmd.extend([
+            "-analyzeduration", "3000000",  # 3 seconds to analyze stream
+            "-probesize", "5000000"  # 5MB probe size
+        ])
+
+        # Add RTP-specific timeout if it's an RTP URL
+        if "rtp" in url.lower():
+            # For RTP, we can use -rw_timeout (in microseconds)
+            cmd.extend(["-rw_timeout", str(timeout * 1000000)])
+
+        # Add custom parameters if specified (like hardware acceleration)
+        if custom_params and custom_params.strip():
+            # Use shlex to properly split shell-like strings
+            import shlex
+            try:
+                custom_args = shlex.split(custom_params)
+                cmd.extend(custom_args)
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Custom params added: {custom_args}")
+            except Exception as e:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error parsing custom params: {e}")
+
+        # Add input URL
+        cmd.extend(["-i", url])
+
+        # Capture just the first frame for speed and efficiency
+        cmd.extend([
+            "-frames:v", "1",  # Capture only 1 frame (first frame)
+            "-q:v", "1",       # Highest quality (1-31, lower is better)
+            "-vf", "yadif",    # Deinterlace for clearer image
+            "-s", "1920x1080", # Full HD resolution for better OCR
+            "-f", "image2",
+            screenshot_path
+        ])
+
+        # Log the FFmpeg command
+        cmd_str = ' '.join(cmd)
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] FFmpeg command: {cmd_str}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Timeout: {timeout}s")
+
+        # Execute FFmpeg with timeout
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Executing FFmpeg...")
+        start_time = time.time()
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
+
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            elapsed_time = time.time() - start_time
+
+            if process.returncode == 0 and os.path.exists(screenshot_path):
+                # Successfully captured screenshot
+                result["screenshot"] = f"/screenshots/{os.path.basename(screenshot_path)}"
+
+                # Parse resolution from ffmpeg output - REQUIRED for success
+                resolution = None
+                if stderr:
+                    # Look for Stream info in ffmpeg stderr
+                    import re
+                    # Pattern to match resolution like "1920x1080" or "720x576"
+                    resolution_pattern = r'Stream.*Video.*\s(\d{3,4}x\d{3,4})'
+                    match = re.search(resolution_pattern, stderr)
+                    if match:
+                        resolution = match.group(1)
+                        # Validate resolution - must not be 0x0 or invalid
+                        width, height = map(int, resolution.split('x'))
+                        if width > 0 and height > 0:
+                            result["resolution"] = resolution
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Resolution detected: {resolution}")
+                        else:
+                            resolution = None
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Invalid resolution detected: {match.group(1)}")
+
+                # Only mark as success if valid resolution was detected
+                if resolution:
+                    result["status"] = "success"
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✓ SUCCESS: Channel {ip} captured successfully")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Time taken: {elapsed_time:.2f} seconds")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Screenshot saved: {screenshot_path}")
+                else:
+                    result["status"] = "failed"
+                    result["error"] = "No resolution detected"
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✗ FAILED: Channel {ip} - No resolution detected")
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Screenshot was captured but no video resolution found")
+            else:
+                # First attempt failed, try just probing the stream
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Screenshot failed, trying stream probe with ffmpeg -i...")
+
+                # Second fallback: just check if stream is accessible
+                probe_cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-analyzeduration", "10000000",  # 10 seconds for better detection
+                    "-probesize", "20000000",  # 20MB for better detection
+                ]
+
+                # Add timeout for RTP/UDP
+                if "rtp" in url.lower() or "udp" in url.lower():
+                    probe_cmd.extend(["-timeout", str(timeout * 2000000)])  # Double timeout
+
+                # Just probe the input
+                probe_cmd.extend(["-i", url])
+
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Probe command: {' '.join(probe_cmd)}")
+
+                try:
+                    probe_process = subprocess.Popen(
+                        probe_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        universal_newlines=True
+                    )
+
+                    probe_stdout, probe_stderr = probe_process.communicate(timeout=15)
+
+                    # Combine stdout and stderr for checking (FFmpeg may output to either)
+                    combined_output = (probe_stdout or "") + (probe_stderr or "")
+
+                    # Check if we got stream information in either output
+                    # Look for "Stream #" and "Video:" or "Input #" which indicates successful stream detection
+                    # Note: ffmpeg -i returns exit code 1 even when successful (no output file specified)
+                    # So we check the output content instead of return code
+                    if combined_output and (("Stream #" in combined_output and "Video:" in combined_output) or
+                                            ("Input #" in combined_output and ("Duration:" in combined_output or "mpegts" in combined_output))):
+                        # Stream is accessible, even though screenshot failed
+                        result["status"] = "success"
+                        result["error"] = None
+                        result["note"] = "Stream accessible but screenshot failed"
+
+                        # Try to get resolution from probe
+                        import re
+                        resolution_pattern = r'Stream.*Video.*?(\d{3,4}x\d{3,4})'
+                        match = re.search(resolution_pattern, combined_output)
+                        if match:
+                            result["resolution"] = match.group(1)
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Resolution detected: {match.group(1)}")
+
+                        # Also check for codec info
+                        if "hevc" in combined_output.lower():
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Codec: HEVC/H.265")
+                        elif "h264" in combined_output.lower():
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Codec: H.264")
+
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✓ SUCCESS (probe): Channel {ip} is accessible (no screenshot)")
+                    else:
+                        # Stream really is not accessible
+                        result["status"] = "failed"
+                        result["error"] = "Stream not accessible"
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✗ FAILED: Channel {ip} is not accessible")
+
+                        # Log what we got for debugging
+                        if combined_output:
+                            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Probe output: {combined_output[:200]}...")
+
+                except (subprocess.TimeoutExpired, Exception) as probe_error:
+                    # Even probe failed
+                    result["status"] = "failed"
+                    result["error"] = "Failed to probe stream"
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✗ FAILED: Channel {ip} probe failed")
+                    if hasattr(locals().get('probe_process'), 'kill'):
+                        try:
+                            probe_process.kill()
+                        except:
+                            pass
+
+        except subprocess.TimeoutExpired:
+            elapsed_time = time.time() - start_time
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ⏱ TIMEOUT: Channel {ip} exceeded {timeout} seconds")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Killing FFmpeg process...")
+            process.kill()
+            # Wait a bit for the process to terminate
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # Force kill if it's still running
+                process.terminate()
+            result["status"] = "failed"
+            result["error"] = f"Timeout after {timeout} seconds"
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Time elapsed: {elapsed_time:.2f} seconds")
+
+    except Exception as e:
+        result["status"] = "failed"
+        result["error"] = str(e)
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ✗ Error: {url} - {str(e)}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Always update the result status, no matter what happens
+        try:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {'='*50}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Test completed for channel {ip}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final Status: {result['status'].upper()}")
+            if result.get('error'):
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error: {result['error']}")
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {'='*50}")
+
+            # Ensure we have valid test_results before updating
+            if test_id in test_results and "results" in test_results[test_id]:
+                # No lock needed for dictionary updates
+                test_results[test_id]["results"][ip_key] = result
+                # Only increment completed count if not a retry
+                if not is_retry:
+                    test_results[test_id]["completed"] += 1
+                # Save immediately to update UI
+                save_results()
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Results saved to file")
+
+                # Update channel library for all results (both successful and failed)
+                update_channel_library(ip_key, result)
+            else:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] WARNING: Cannot save result - test_id {test_id} not found")
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in test_iptv_stream (final save): {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+
+
+
+def run_batch_test(base_url, start_ip, end_ip, test_id):
+    """Run batch test for IP range"""
+    config = load_config()
+
+    # Get queue size from config, default to 5
+    queue_size = config.get('queue_size', 5)
+    if not isinstance(queue_size, int) or queue_size < 1:
+        queue_size = 5
+
+    # Parse IP range
+    ip_parts = start_ip.split('.')
+    base = '.'.join(ip_parts[:3])
+    start_num = int(ip_parts[3])
+    end_num = int(end_ip.split('.')[3])
+
+    print(f"\n{'='*60}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting batch test")
+    print(f"Test ID: {test_id}")
+    print(f"Base URL: {base_url}")
+    print(f"IP Range: {start_ip} to {end_ip}")
+    print(f"Total IPs: {end_num - start_num + 1}")
+    print(f"Queue Size: {queue_size}")
+    print(f"{'='*60}\n")
+
+    # Initialize test results without clearing old tests
+    # Keep a maximum of 10 test results to avoid unlimited growth
+    if len(test_results) >= 10:
+        # Remove the oldest test (based on sorting by key which are UUIDs with timestamps)
+        oldest_test_id = min(test_results.keys())
+        del test_results[oldest_test_id]
+
+    # Ensure base_url contains {ip} placeholder
+    if '{ip}' not in base_url:
+        print(f"Warning: base_url doesn't contain {{ip}} placeholder, using as-is: {base_url}")
+
+    # No lock needed for dictionary update
+    test_results[test_id] = {
+        "base_url": base_url,
+        "start_ip": start_ip,
+        "end_ip": end_ip,
+        "status": "running",
+        "total": end_num - start_num + 1,
+        "completed": 0,
+        "results": {},
+        "start_time": datetime.now().isoformat()
+    }
+
+    # Test each IP
+    threads = []
+    for i in range(start_num, end_num + 1):
+        ip = f"{base}.{i}"
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting thread for IP: {ip}")
+        thread = threading.Thread(target=test_iptv_stream, args=(base_url, ip, test_id, config))
+        thread.daemon = True  # Make threads daemon so they don't block
+        thread.start()
+        threads.append(thread)
+
+        # Limit concurrent threads to avoid overwhelming the system
+        # Clean up completed threads
+        if len(threads) >= queue_size:
+            # Remove completed threads from list
+            alive_threads = [t for t in threads if t.is_alive()]
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Active threads: {len(alive_threads)}/{queue_size}")
+            threads = alive_threads
+
+            # If still at capacity, wait briefly
+            while len(threads) >= queue_size:
+                time.sleep(0.1)
+                threads = [t for t in threads if t.is_alive()]
+
+    # Don't wait for all threads to complete - let them run in background
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] All {end_num - start_num + 1} test threads started")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Returning control to Flask - tests running in background")
+
+    # Start a monitor thread to check completion
+    def monitor_test_completion():
+        """Monitor test completion in background"""
+        total_ips = end_num - start_num + 1
+
+        while True:
+            time.sleep(1)  # Check every second
+
+            # No lock needed for reading
+            if test_id not in test_results:
+                break  # Test was deleted
+
+            completed = test_results[test_id].get("completed", 0)
+
+            # Count actual results with final status (not "testing")
+            results_dict = test_results[test_id].get("results", {})
+            final_count = sum(1 for r in results_dict.values() if r.get("status") in ["success", "failed"])
+
+            # Log progress periodically
+            if completed % 5 == 0 or completed == total_ips:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Test progress: {completed}/{total_ips} completed, {final_count} with final status")
+
+            # Check if all tests are completed
+            if completed >= total_ips:
+                test_results[test_id]["status"] = "completed"
+                total_success = sum(1 for r in test_results[test_id]["results"].values() if r["status"] == "success")
+                total_failed = sum(1 for r in test_results[test_id]["results"].values() if r["status"] == "failed")
+
+                # Save results
+                save_results()
+
+                print(f"\n{'='*60}")
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] BATCH TEST COMPLETED")
+                print(f"Test ID: {test_id}")
+                print(f"Total Tested: {total_success + total_failed}")
+                print(f"Success: {total_success} ✓")
+                print(f"Failed: {total_failed} ✗")
+                print(f"Success Rate: {(total_success / (total_success + total_failed) * 100) if (total_success + total_failed) > 0 else 0:.1f}%")
+                print(f"{'='*60}\n")
+                break
+
+    monitor_thread = threading.Thread(target=monitor_test_completion, daemon=True)
+    monitor_thread.start()
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Monitor thread started for test {test_id}")
+
+
+@app.route('/')
+def index():
+    """Serve the main HTML page"""
+    return send_from_directory('.', 'index.html')
+
+
+@app.route('/static/<path:path>')
+def serve_static(path):
+    """Serve static files"""
+    return send_from_directory('static', path)
+
+
+@app.route('/screenshots/<path:path>')
+def serve_screenshot(path):
+    """Serve screenshot files"""
+    return send_from_directory(SCREENSHOTS_DIR, path)
+
+
+@app.route('/api/config', methods=['GET', 'POST'])
+def handle_config():
+    """Get or update configuration"""
+    if request.method == 'GET':
+        config = load_config()
+        return jsonify(config)
+
+    elif request.method == 'POST':
+        # Load existing config and update with new values
+        config = load_config()
+        config.update(request.json)
+        save_config(config)
+        return jsonify({"status": "success", "config": config})
+
+
+
+@app.route('/api/test/start', methods=['POST'])
+def start_test():
+    """Start a new batch test"""
+    data = request.json
+    base_url = data.get('base_url')
+    start_ip = data.get('start_ip')
+    end_ip = data.get('end_ip')
+
+    # Validate required fields
+    if not base_url or not start_ip or not end_ip:
+        return jsonify({"status": "error", "message": "Missing required fields: base_url, start_ip, end_ip"}), 400
+
+    # Save the user's input to config
+    config = load_config()
+    config['base_url'] = base_url
+    config['start_ip'] = start_ip
+    config['end_ip'] = end_ip
+    save_config(config)
+
+    # Generate test ID
+    test_id = str(uuid.uuid4())
+
+    # Start test in background thread (daemon thread so it doesn't block shutdown)
+    thread = threading.Thread(target=run_batch_test, args=(base_url, start_ip, end_ip, test_id))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"status": "started", "test_id": test_id})
+
+
+@app.route('/api/test/status/<test_id>')
+def get_test_status(test_id):
+    """Get status of a running test"""
+    # No lock needed for reading
+    if test_id in test_results:
+        # Make a copy to avoid issues during JSON serialization
+        return jsonify(copy.deepcopy(test_results[test_id]))
+    return jsonify({"error": "Test not found"}), 404
+
+
+@app.route('/api/test/retry', methods=['POST'])
+def retry_test():
+    """Retry a failed test"""
+    data = request.json
+    test_id = data.get('test_id')
+    ip = data.get('ip')
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Retry request for IP: {ip}, Test ID: {test_id}")
+
+    # No lock needed for reading
+    if test_id not in test_results:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error: Test ID {test_id} not found")
+        return jsonify({"error": "Test not found"}), 404
+
+    # Get the original URL from the failed result
+    if ip in test_results[test_id]["results"]:
+        original_url = test_results[test_id]["results"][ip].get("url", "")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Found original URL: {original_url}")
+        # Simply use the base_url from the test data with {ip} placeholder
+        base_url = test_results[test_id]["base_url"]
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Using base_url: {base_url}")
+    else:
+        # Fallback: construct base_url from saved base_url
+        base_url = test_results[test_id]["base_url"]
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Using base_url from test: {base_url}")
+        # Ensure base_url has proper format
+        if '{ip}' not in base_url:
+            if base_url.endswith('/'):
+                base_url = base_url + '{ip}:8000'
+            else:
+                base_url = base_url + '/{ip}:8000'
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final base_url template: {base_url}")
+
+    config = load_config()
+
+    try:
+        # Run test in background thread with is_retry=True
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting retry thread for {ip}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Thread args: base_url={base_url}, ip={ip}, test_id={test_id}, config={config}")
+
+        thread = threading.Thread(target=test_iptv_stream, args=(base_url, ip, test_id, config, True))
+        thread.daemon = True  # Make thread daemon so it doesn't block shutdown
+        thread.start()
+
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Retry thread started successfully for {ip}")
+
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error starting retry thread: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+    return jsonify({"status": "retrying", "test_id": test_id, "ip": ip})
+
+
+@app.route('/api/test/delete/<test_id>', methods=['DELETE'])
+def delete_test_history(test_id):
+    """Delete a test history entry and its associated screenshots"""
+    global test_results
+
+    if test_id not in test_results:
+        return jsonify({"status": "error", "message": "Test not found"}), 404
+
+    # Get the test data before deletion
+    test_data = test_results[test_id]
+
+    # Delete associated screenshots
+    screenshots_dir = SCREENSHOTS_DIR  # Use the same directory as where screenshots are saved
+    deleted_files = []
+
+    if "results" in test_data:
+        for ip, result in test_data["results"].items():
+            # Try two methods to find the screenshot
+            screenshot_paths = []
+
+            # Method 1: Extract filename from the stored screenshot path
+            if "screenshot" in result and result["screenshot"]:
+                screenshot_filename = os.path.basename(result["screenshot"])
+                screenshot_paths.append(os.path.join(screenshots_dir, screenshot_filename))
+
+            # Method 2: Construct filename based on naming pattern
+            expected_filename = f"{test_id}_{ip.replace('.', '_')}.jpg"
+            screenshot_paths.append(os.path.join(screenshots_dir, expected_filename))
+
+            # Try to delete using both possible paths
+            for screenshot_path in screenshot_paths:
+                try:
+                    if os.path.exists(screenshot_path):
+                        os.remove(screenshot_path)
+                        deleted_files.append(os.path.basename(screenshot_path))
+                        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Deleted screenshot: {screenshot_path}")
+                        break  # Stop after successfully deleting
+                except Exception as e:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error deleting screenshot {screenshot_path}: {str(e)}")
+
+    # Delete the test from results
+    del test_results[test_id]
+
+    # Save updated results
+    save_results()
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Deleted test {test_id} and {len(deleted_files)} screenshots")
+
+    return jsonify({
+        "status": "success",
+        "message": f"Test deleted successfully",
+        "deleted_screenshots": len(deleted_files)
+    })
+
+@app.route('/api/results')
+def get_all_results():
+    """Get all test results"""
+    # No lock needed for reading
+    return jsonify(copy.deepcopy(test_results))
+
+
+@app.route('/api/channels')
+def get_channels():
+    """Get all successful TV channels with group information"""
+    channels_with_groups = copy.deepcopy(tv_channels)
+
+    # Add group information to each channel
+    for ip, channel in channels_with_groups.items():
+        channel_groups = []
+        for group_id, group in groups.items():
+            if ip in group.get('channels', []):
+                channel_groups.append({
+                    'id': group_id,
+                    'name': group['name']
+                })
+        channel['groups'] = channel_groups
+
+    return jsonify({"status": "success", "channels": channels_with_groups})
+
+
+
+@app.route('/api/channels/update', methods=['POST'])
+def update_channel_name():
+    """Update channel information"""
+    data = request.json
+    ip = data.get('ip')
+
+    if not ip:
+        return jsonify({"status": "error", "message": "IP required"}), 400
+
+    # No lock needed for dictionary update
+    if ip in tv_channels:
+        # Update any provided fields
+        if 'name' in data:
+            tv_channels[ip]['name'] = data['name']
+        if 'tvg_id' in data:
+            tv_channels[ip]['tvg_id'] = data.get('tvg_id', '')
+        if 'group' in data:
+            tv_channels[ip]['group'] = data.get('group', '')
+        if 'playback' in data:
+            tv_channels[ip]['playback'] = data.get('playback', '')
+        if 'logo' in data:
+            tv_channels[ip]['logo'] = data.get('logo', '')
+
+        save_channels()
+        return jsonify({"status": "success"})
+    else:
+        return jsonify({"status": "error", "message": "Channel not found"}), 404
+
+
+@app.route('/api/channels/upload-logo', methods=['POST'])
+def upload_channel_logo():
+    """Upload logo for a channel"""
+    ip = request.form.get('ip')
+
+    if not ip:
+        return jsonify({"status": "error", "message": "IP required"}), 400
+
+    if 'logo' not in request.files:
+        return jsonify({"status": "error", "message": "No logo file provided"}), 400
+
+    file = request.files['logo']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No file selected"}), 400
+
+    # Create logos directory if not exists
+    logos_dir = os.path.join(os.path.dirname(__file__), 'logos')
+    os.makedirs(logos_dir, exist_ok=True)
+
+    # Save logo with IP-based filename
+    ext = os.path.splitext(file.filename)[1] or '.png'
+    filename = f"{ip.replace('.', '_')}{ext}"
+    filepath = os.path.join(logos_dir, filename)
+    file.save(filepath)
+
+    # Update channel logo path
+    if ip in tv_channels:
+        tv_channels[ip]['logo'] = f"/logos/{filename}"
+        save_channels()
+        return jsonify({"status": "success", "logo": f"/logos/{filename}"})
+    else:
+        return jsonify({"status": "error", "message": "Channel not found"}), 404
+
+@app.route('/logos/<path:filename>')
+def serve_logo(filename):
+    """Serve logo files"""
+    logos_dir = os.path.join(os.path.dirname(__file__), 'logos')
+    return send_from_directory(logos_dir, filename)
+
+# Groups management functions
+def load_groups():
+    """Load groups from file"""
+    try:
+        if os.path.exists(GROUPS_FILE):
+            with open(GROUPS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('groups', {})
+        return {}
+    except Exception as e:
+        print(f"Error loading groups: {str(e)}")
+        return {}
+
+def save_groups():
+    """Save groups to file"""
+    try:
+        with file_write_lock:
+            with open(GROUPS_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'groups': groups}, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving groups: {str(e)}")
+
+@app.route('/api/groups')
+def get_groups():
+    """Get all groups"""
+    return jsonify({"status": "success", "groups": copy.deepcopy(groups)})
+
+@app.route('/api/groups/create', methods=['POST'])
+def create_group():
+    """Create a new group"""
+    data = request.json
+    group_name = data.get('name')
+
+    if not group_name:
+        return jsonify({"status": "error", "message": "Group name required"}), 400
+
+    # Generate unique ID
+    group_id = str(uuid.uuid4())
+
+    # Find max sort order
+    max_sort = max([g.get('sort_order', 0) for g in groups.values()]) if groups else 0
+
+    groups[group_id] = {
+        'name': group_name,
+        'channels': [],  # List of channel IPs
+        'created': datetime.now().isoformat(),
+        'sort_order': max_sort + 1
+    }
+    save_groups()
+
+    return jsonify({"status": "success", "group_id": group_id})
+
+@app.route('/api/groups/<group_id>', methods=['DELETE'])
+def delete_group(group_id):
+    """Delete a group"""
+    if group_id not in groups:
+        return jsonify({"status": "error", "message": "Group not found"}), 404
+
+    del groups[group_id]
+    save_groups()
+
+    return jsonify({"status": "success"})
+
+@app.route('/api/groups/<group_id>/rename', methods=['POST'])
+def rename_group(group_id):
+    """Rename a group"""
+    if group_id not in groups:
+        return jsonify({"status": "error", "message": "Group not found"}), 404
+
+    data = request.json
+    new_name = data.get('name')
+
+    if not new_name:
+        return jsonify({"status": "error", "message": "New name required"}), 400
+
+    groups[group_id]['name'] = new_name
+    save_groups()
+
+    return jsonify({"status": "success"})
+
+@app.route('/api/groups/reorder', methods=['POST'])
+def reorder_groups():
+    """Update groups sort order"""
+    data = request.json
+    order_list = data.get('order', [])
+
+    if not order_list:
+        return jsonify({"status": "error", "message": "Order list required"}), 400
+
+    # Update sort order for each group
+    for index, group_id in enumerate(order_list):
+        if group_id in groups:
+            groups[group_id]['sort_order'] = index + 1
+
+    save_groups()
+
+    return jsonify({"status": "success"})
+
+@app.route('/api/groups/<group_id>/channels', methods=['POST'])
+def add_channels_to_group(group_id):
+    """Add channels to a group"""
+    if group_id not in groups:
+        return jsonify({"status": "error", "message": "Group not found"}), 404
+
+    data = request.json
+    channel_ips = data.get('channels', [])
+
+    if not channel_ips:
+        return jsonify({"status": "error", "message": "No channels provided"}), 400
+
+    # Add unique channels only
+    existing_channels = set(groups[group_id]['channels'])
+    for ip in channel_ips:
+        if ip not in existing_channels:
+            groups[group_id]['channels'].append(ip)
+
+    save_groups()
+
+    return jsonify({"status": "success", "added": len(channel_ips)})
+
+@app.route('/api/groups/<group_id>/channels', methods=['DELETE'])
+def remove_channels_from_group(group_id):
+    """Remove channels from a group"""
+    if group_id not in groups:
+        return jsonify({"status": "error", "message": "Group not found"}), 404
+
+    data = request.json
+    channel_ips = data.get('channels', [])
+
+    if not channel_ips:
+        return jsonify({"status": "error", "message": "No channels provided"}), 400
+
+    # Remove specified channels
+    groups[group_id]['channels'] = [ip for ip in groups[group_id]['channels'] if ip not in channel_ips]
+    save_groups()
+
+    return jsonify({"status": "success", "removed": len(channel_ips)})
+
+@app.route('/api/channels/import', methods=['POST'])
+def import_channels():
+    """Import channels from M3U file"""
+    global tv_channels, groups
+
+    try:
+        # Check if file is present
+        if 'file' not in request.files:
+            return jsonify({"status": "error", "message": "No file provided"}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"status": "error", "message": "No file selected"}), 400
+
+        # Read M3U content
+        content = file.read().decode('utf-8')
+
+        # Parse M3U
+        parsed_channels = parse_m3u(content)
+
+        if not parsed_channels:
+            return jsonify({"status": "error", "message": "No valid channels found in M3U file"}), 400
+
+        # Import channels
+        imported_count = 0
+        updated_count = 0
+        created_groups = []
+        new_channel_ips = []  # Track new channels for highlighting
+
+        for ch in parsed_channels:
+            ip = ch['ip']
+            is_new = ip not in tv_channels
+
+            # Get existing channel data if exists
+            existing = tv_channels.get(ip, {})
+
+            # Smart merge: use imported value if not empty, otherwise keep existing
+            tv_channels[ip] = {
+                'name': ch['name'] if ch['name'] else existing.get('name', ''),
+                'tvg_id': ch['tvg_id'] if ch['tvg_id'] else existing.get('tvg_id', ''),
+                'url': ch['url'] if ch['url'] else existing.get('url', ''),
+                'screenshot': existing.get('screenshot', ''),  # Always preserve screenshot
+                'timestamp': datetime.now().isoformat(),
+                'resolution': existing.get('resolution', ''),  # Always preserve resolution
+                'group': ch['group'] if ch['group'] else existing.get('group', ''),
+                'logo': ch['logo'] if ch['logo'] else existing.get('logo', ''),
+                'catchup': ch['catchup'] if ch['catchup'] else existing.get('catchup', ''),
+                'playback': ch['playback'] if ch['playback'] else existing.get('playback', '')
+            }
+
+            if is_new:
+                imported_count += 1
+                new_channel_ips.append(ip)
+            else:
+                updated_count += 1
+
+            # Auto-create group if not exists
+            if ch['group']:
+                group_exists = False
+                target_group_id = None
+
+                for g_id, g_data in groups.items():
+                    if g_data['name'] == ch['group']:
+                        group_exists = True
+                        target_group_id = g_id
+                        break
+
+                if not group_exists:
+                    target_group_id = str(uuid.uuid4())
+                    max_sort = max([g.get('sort_order', 0) for g in groups.values()]) if groups else 0
+                    groups[target_group_id] = {
+                        'name': ch['group'],
+                        'channels': [],
+                        'created': datetime.now().isoformat(),
+                        'sort_order': max_sort + 1
+                    }
+                    created_groups.append(ch['group'])
+
+                # Remove channel from all other groups first (覆盖逻辑)
+                for g_id, g_data in groups.items():
+                    if g_id != target_group_id and ip in g_data.get('channels', []):
+                        g_data['channels'].remove(ip)
+
+                # Add to target group
+                if target_group_id and ip not in groups[target_group_id].get('channels', []):
+                    groups[target_group_id]['channels'].append(ip)
+
+        # Save all changes
+        save_channels()
+        save_groups()
+
+        return jsonify({
+            "status": "success",
+            "imported": imported_count,
+            "updated": updated_count,
+            "total": len(parsed_channels),
+            "groups_created": len(set(created_groups)),
+            "new_channels": new_channel_ips  # Return list of new channel IPs for highlighting
+        })
+
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error importing M3U: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/channels/export')
+def export_channels():
+    """Export channels as M3U playlist with full metadata, sorted by groups and resolution"""
+    m3u_content = "#EXTM3U\n\n"
+
+    # Create a list of channels with their group information for sorting
+    channels_list = []
+    for ip, channel in tv_channels.items():
+        # Get channel groups
+        channel_groups = []
+        min_sort_order = 9999
+        for group_id, group in groups.items():
+            if ip in group.get('channels', []):
+                channel_groups.append({
+                    'id': group_id,
+                    'name': group['name'],
+                    'sort_order': group.get('sort_order', 9999)
+                })
+                if group.get('sort_order', 9999) < min_sort_order:
+                    min_sort_order = group.get('sort_order', 9999)
+
+        channels_list.append({
+            'ip': ip,
+            'channel': channel,
+            'groups': channel_groups,
+            'min_sort_order': min_sort_order
+        })
+
+    # Sort channels by:
+    # 1. Test status (successful first)
+    # 2. Group sort order (grouped channels first)
+    # 3. Resolution (descending within same group)
+    # 4. Channel name
+    # 5. IP address
+    def get_resolution_width(channel):
+        resolution = channel.get('resolution', '')
+        if not resolution:
+            return 0
+        try:
+            width = int(resolution.split('x')[0])
+            return width
+        except:
+            return 0
+
+    def sort_key(item):
+        channel = item['channel']
+
+        # Test status (0 = success, 1 = failed)
+        test_status = channel.get('test_status', 'success')
+        status_order = 0 if test_status == 'success' else 1
+
+        # Group order
+        group_order = item['min_sort_order']
+
+        # Resolution (negative for descending)
+        resolution_width = -get_resolution_width(channel)
+
+        # Channel name (empty names go last)
+        name = channel.get('name', '')
+        name_order = (1 if not name else 0, name)
+
+        # IP address
+        ip_parts = tuple(int(part) for part in item['ip'].split('.'))
+
+        return (status_order, group_order, resolution_width, name_order, ip_parts)
+
+    sorted_channels = sorted(channels_list, key=sort_key)
+
+    # Generate M3U content
+    for item in sorted_channels:
+        ip = item['ip']
+        channel = item['channel']
+        name = channel.get('name', 'Unknown')
+        url = channel.get('url', '')
+
+        if url:
+            # Build EXTINF line with all available metadata
+            extinf_parts = ["#EXTINF:-1"]
+
+            # Add tvg-id if available
+            tvg_id = channel.get('tvg_id', '')
+            if tvg_id:
+                extinf_parts.append(f'tvg-id="{tvg_id}"')
+
+            # Use group from channel data, or from groups if assigned
+            group = channel.get('group', '')
+            if not group and item['groups']:
+                # Use the first group's name if channel is in groups
+                group = item['groups'][0]['name']
+
+            if group:
+                extinf_parts.append(f'group-title="{group}"')
+
+            # Add tvg-logo if available
+            logo = channel.get('logo', '')
+            if logo:
+                extinf_parts.append(f'tvg-logo="{logo}"')
+
+            # Add catchup if available
+            catchup = channel.get('catchup', '')
+            if catchup:
+                extinf_parts.append(f'catchup="{catchup}"')
+
+            # Add catchup-source if available
+            playback = channel.get('playback', '')
+            if playback:
+                extinf_parts.append(f'catchup-source="{playback}"')
+
+            # Join parts and add channel name
+            extinf_line = ' '.join(extinf_parts) + f",{name}"
+
+            m3u_content += f"{extinf_line}\n{url}\n\n"
+
+    response = app.response_class(
+        response=m3u_content,
+        status=200,
+        mimetype='text/plain'
+    )
+    response.headers['Content-Disposition'] = f'attachment; filename=channels_{datetime.now().strftime("%Y%m%d")}.m3u'
+    return response
+
+
+@app.route('/api/channels/test-connectivity', methods=['POST'])
+def test_channel_connectivity():
+    """Test connectivity of one or more channels with full stream test (capture screenshot and resolution)"""
+    global tv_channels
+
+    data = request.json
+    ips = data.get('ips', [])  # Can be single IP or list of IPs
+
+    if not ips:
+        return jsonify({"status": "error", "message": "No IPs provided"}), 400
+
+    # Ensure ips is a list
+    if isinstance(ips, str):
+        ips = [ips]
+
+    config = load_config()
+
+    # Generate a test ID for this connectivity test batch
+    test_id = f"connectivity_{str(uuid.uuid4())}"
+
+    # Function to test a single channel connectivity with full stream test
+    def test_single_connectivity(ip):
+        if ip not in tv_channels:
+            tv_channels[ip]['connectivity'] = 'offline'
+            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+            return {"ip": ip, "connectivity": "offline", "message": "Channel not found"}
+
+        channel = tv_channels[ip]
+        url = channel.get('url', '')
+
+        if not url:
+            tv_channels[ip]['connectivity'] = 'offline'
+            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+            return {"ip": ip, "connectivity": "offline", "message": "No URL"}
+
+        try:
+            timeout = config.get("timeout") or 10
+            if isinstance(timeout, str):
+                try:
+                    timeout = int(timeout)
+                except:
+                    timeout = 10
+
+            screenshot_path = os.path.join(SCREENSHOTS_DIR, f"connectivity_{ip.replace('.', '_')}.jpg")
+
+            # Build FFmpeg command for full stream test
+            cmd = ["ffmpeg", "-y"]
+
+            # Add network timeout and analysis parameters BEFORE input
+            cmd.extend([
+                "-analyzeduration", "3000000",  # 3 seconds to analyze stream
+                "-probesize", "5000000"  # 5MB probe size
+            ])
+
+            # Add RTP-specific timeout if it's an RTP URL
+            if "rtp" in url.lower():
+                cmd.extend(["-rw_timeout", str(timeout * 1000000)])
+
+            # Add custom parameters if specified
+            custom_params = config.get("custom_params", "")
+            if custom_params and custom_params.strip():
+                import shlex
+                try:
+                    custom_args = shlex.split(custom_params)
+                    cmd.extend(custom_args)
+                except Exception as e:
+                    print(f"[Connectivity Test] Error parsing custom params: {e}")
+
+            # Add input URL
+            cmd.extend(["-i", url])
+
+            # Capture first frame
+            cmd.extend([
+                "-frames:v", "1",
+                "-q:v", "1",
+                "-vf", "yadif",
+                "-s", "1920x1080",
+                "-f", "image2",
+                screenshot_path
+            ])
+
+            # Execute FFmpeg with timeout
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+
+                if process.returncode == 0 and os.path.exists(screenshot_path):
+                    # Successfully captured screenshot
+                    tv_channels[ip]['screenshot'] = f"/screenshots/{os.path.basename(screenshot_path)}"
+
+                    # Parse resolution from ffmpeg output - REQUIRED for success
+                    resolution = None
+                    if stderr:
+                        import re
+                        resolution_pattern = r'Stream.*Video.*\s(\d{3,4}x\d{3,4})'
+                        match = re.search(resolution_pattern, stderr)
+                        if match:
+                            resolution = match.group(1)
+                            # Validate resolution - must not be 0x0 or invalid
+                            try:
+                                width, height = map(int, resolution.split('x'))
+                                if width > 0 and height > 0:
+                                    tv_channels[ip]['resolution'] = resolution
+                                else:
+                                    resolution = None
+                            except:
+                                resolution = None
+
+                    # Only mark as online if valid resolution was detected
+                    if resolution:
+                        tv_channels[ip]['connectivity'] = 'online'
+                        tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                        tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+                        return {
+                            "ip": ip,
+                            "connectivity": "online",
+                            "screenshot": tv_channels[ip]['screenshot'],
+                            "resolution": resolution
+                        }
+                    else:
+                        # No resolution detected - mark as failed
+                        previous_connectivity = channel.get('connectivity', 'untested')
+                        if previous_connectivity == 'online':
+                            new_connectivity = 'offline'
+                        else:
+                            new_connectivity = previous_connectivity
+                        tv_channels[ip]['connectivity'] = new_connectivity
+                        tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                        tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+                        return {"ip": ip, "connectivity": new_connectivity, "message": "No resolution detected"}
+                else:
+                    # Try lightweight probe as fallback
+                    probe_cmd = [
+                        "ffprobe",
+                        "-v", "error",
+                        "-show_entries", "stream=codec_type,width,height",
+                        "-of", "default=noprint_wrappers=1"
+                    ]
+
+                    if "rtp" in url.lower() or "udp" in url.lower() or "http" in url.lower():
+                        probe_cmd.extend(["-timeout", str(timeout * 1000000)])
+
+                    probe_cmd.append(url)
+
+                    try:
+                        probe_process = subprocess.Popen(
+                            probe_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            universal_newlines=True
+                        )
+
+                        probe_stdout, probe_stderr = probe_process.communicate(timeout=timeout)
+                        combined_output = (probe_stdout or "") + (probe_stderr or "")
+
+                        if "codec_type=video" in combined_output or "Video:" in combined_output:
+                            # Stream is accessible but screenshot failed
+                            tv_channels[ip]['connectivity'] = 'online'
+                            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+
+                            # Try to extract resolution
+                            import re
+                            width_match = re.search(r'width=(\d+)', combined_output)
+                            height_match = re.search(r'height=(\d+)', combined_output)
+                            if width_match and height_match:
+                                resolution = f"{width_match.group(1)}x{height_match.group(1)}"
+                                tv_channels[ip]['resolution'] = resolution
+
+                            return {"ip": ip, "connectivity": "online", "note": "Screenshot failed but stream accessible"}
+                        else:
+                            # Test failed - set offline if previously online, otherwise keep current status
+                            previous_connectivity = channel.get('connectivity', 'untested')
+                            if previous_connectivity == 'online':
+                                new_connectivity = 'offline'
+                            else:
+                                new_connectivity = previous_connectivity
+                            tv_channels[ip]['connectivity'] = new_connectivity
+                            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+                            return {"ip": ip, "connectivity": new_connectivity}
+
+                    except (subprocess.TimeoutExpired, Exception):
+                        if hasattr(locals().get('probe_process'), 'kill'):
+                            try:
+                                probe_process.kill()
+                            except:
+                                pass
+                        # Test failed - set offline if previously online
+                        previous_connectivity = channel.get('connectivity', 'untested')
+                        if previous_connectivity == 'online':
+                            new_connectivity = 'offline'
+                        else:
+                            new_connectivity = previous_connectivity
+                        tv_channels[ip]['connectivity'] = new_connectivity
+                        tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                        tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+                        return {"ip": ip, "connectivity": new_connectivity}
+
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                # Test failed - set offline if previously online
+                previous_connectivity = channel.get('connectivity', 'untested')
+                if previous_connectivity == 'online':
+                    new_connectivity = 'offline'
+                else:
+                    new_connectivity = previous_connectivity
+                tv_channels[ip]['connectivity'] = new_connectivity
+                tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+                tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+                return {"ip": ip, "connectivity": new_connectivity, "message": "Timeout"}
+
+        except Exception as e:
+            print(f"[Connectivity Test] Error testing {ip}: {str(e)}")
+            # Test failed - set offline if previously online
+            previous_connectivity = channel.get('connectivity', 'untested')
+            if previous_connectivity == 'online':
+                new_connectivity = 'offline'
+            else:
+                new_connectivity = previous_connectivity
+            tv_channels[ip]['connectivity'] = new_connectivity
+            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+            return {"ip": ip, "connectivity": new_connectivity, "message": str(e)}
+
+    # Test all channels
+    results = []
+    for ip in ips:
+        result = test_single_connectivity(ip)
+        results.append(result)
+
+    # Save updated channels
+    save_channels()
+
+    return jsonify({
+        "status": "success",
+        "results": results,
+        "total": len(ips)
+    })
+
+
+@app.route('/api/channels/clear-names', methods=['POST'])
+def clear_channel_names():
+    """Clear all channel names"""
+    global tv_channels
+
+    cleared_count = 0
+    for ip in tv_channels:
+        if tv_channels[ip].get('name'):
+            tv_channels[ip]['name'] = ''
+            cleared_count += 1
+
+    save_channels()
+
+    return jsonify({
+        "status": "success",
+        "cleared": cleared_count,
+        "total": len(tv_channels)
+    })
+
+@app.route('/api/channels/recognize', methods=['POST'])
+def recognize_channels():
+    """Start AI recognition of channel names in background"""
+    # Load configuration
+    config = load_config()
+    ai_config = config.get('ai_model', {})
+
+    if not ai_config.get('enabled'):
+        return jsonify({"status": "error", "message": "AI model not configured"})
+
+    if not ai_config.get('api_url') or not ai_config.get('api_key'):
+        return jsonify({"status": "error", "message": "Please configure AI model API URL and key"})
+
+    # Find channels without names but with screenshots
+    channels_to_recognize = []
+    for ip, channel in tv_channels.items():
+        if not channel.get('name') and channel.get('screenshot'):
+            channels_to_recognize.append((ip, channel))
+
+    if not channels_to_recognize:
+        return jsonify({"status": "success", "message": "No channels need recognition", "recognized": 0, "total": 0})
+
+    # Start background recognition
+    def run_recognition():
+        recognized_count = 0
+        errors = []
+        total = len(channels_to_recognize)
+
+        print(f"[AI Recognition] Starting background recognition for {total} channels")
+
+        for idx, (ip, channel) in enumerate(channels_to_recognize, 1):
+            print(f"[AI Recognition] Processing {idx}/{total}: IP {ip}")
+            try:
+                # Read the screenshot file
+                screenshot_path = os.path.join(os.path.dirname(__file__), channel['screenshot'].lstrip('/'))
+                if not os.path.exists(screenshot_path):
+                    errors.append(f"Screenshot not found for {ip}")
+                    continue
+
+                with open(screenshot_path, 'rb') as f:
+                    image_data = base64.b64encode(f.read()).decode('utf-8')
+
+                # Prepare the request to AI model
+                headers = {
+                    'Authorization': f'Bearer {ai_config["api_key"]}',
+                    'Content-Type': 'application/json'
+                }
+
+                # Prepare payload for OpenRouter or other APIs
+                # OpenRouter uses OpenAI-compatible format for all models
+                if 'openrouter' in ai_config.get('api_url', '').lower():
+                    # OpenRouter format (works for Claude, GPT-4V, etc.)
+                    payload = {
+                        "model": ai_config['model'],
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "观察图片中的台标或文字，识别这是哪个电视频道。只返回频道名称，如：CCTV1、湖南卫视、东方卫视等。有文字的以台标+文字为准，没有文字的以台标为准。如果无法识别，请返回'未知频道'。"
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{image_data}"
+                                    }
+                                }
+                            ]
+                        }],
+                        "max_tokens": 20
+                    }
+                elif 'anthropic' in ai_config.get('api_url', '').lower():
+                    # Native Anthropic API format
+                    payload = {
+                        "model": ai_config['model'],
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "观察图片中的台标或文字，识别这是哪个电视频道。只返回频道名称，如：CCTV1、湖南卫视、东方卫视等。有文字的以台标+文字为准，没有文字的以台标为准。如果无法识别，请返回'未知频道'。"
+                                },
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/jpeg",
+                                        "data": image_data
+                                    }
+                                }
+                            ]
+                        }],
+                        "max_tokens": 20
+                    }
+                else:
+                    # OpenAI API format (default)
+                    payload = {
+                        "model": ai_config.get('model', 'gpt-4-vision-preview'),
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "观察图片中的台标或文字，识别这是哪个电视频道。只返回频道名称，如：CCTV1、湖南卫视、东方卫视等。有文字的以台标+文字为准，没有文字的以台标为准。如果无法识别，请返回'未知频道'。"
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{image_data}"
+                                    }
+                                }
+                            ]
+                        }],
+                        "max_tokens": 20
+                    }
+
+                # Send request to AI model
+                print(f"[AI Recognition] Sending request for IP {ip}")
+                response = requests.post(ai_config['api_url'], headers=headers, json=payload, timeout=30)
+
+                if response.status_code == 200:
+                    result = response.json()
+                    print(f"[AI Recognition] Response for {ip}: {json.dumps(result, ensure_ascii=False)[:200]}")
+
+                    # Extract channel name from response
+                    channel_name = "未知频道"
+                    if 'choices' in result and result['choices']:
+                        # OpenAI/OpenRouter format
+                        channel_name = result['choices'][0]['message']['content'].strip()
+                    elif 'content' in result and isinstance(result['content'], list) and result['content']:
+                        # Claude format
+                        channel_name = result['content'][0].get('text', '').strip()
+                    elif 'content' in result and isinstance(result['content'], str):
+                        # Alternative format
+                        channel_name = result['content'].strip()
+
+                    print(f"[AI Recognition] Extracted channel name for {ip}: {channel_name}")
+
+                    # Update channel name if valid
+                    if channel_name and channel_name != "未知频道" and channel_name != "":
+                        tv_channels[ip]['name'] = channel_name
+                        recognized_count += 1
+                        print(f"[AI Recognition] Successfully set channel name for {ip}: {channel_name}")
+                    else:
+                        print(f"[AI Recognition] Could not recognize channel for {ip}")
+                else:
+                    error_msg = f"AI API error for {ip}: {response.status_code} - {response.text[:200]}"
+                    print(f"[AI Recognition] {error_msg}")
+                    errors.append(error_msg)
+
+            except Exception as e:
+                print(f"[AI Recognition] Error recognizing {ip}: {str(e)}")
+                errors.append(f"Error recognizing {ip}: {str(e)}")
+
+        # Save updated channels
+        if recognized_count > 0:
+            save_channels()
+
+        print(f"[AI Recognition] Completed: {recognized_count}/{total} channels recognized")
+        if errors:
+            print(f"[AI Recognition] Errors: {errors}")
+
+    # Start background thread
+    thread = threading.Thread(target=run_recognition)
+    thread.daemon = True
+    thread.start()
+
+    # Return immediately
+    return jsonify({
+        "status": "started",
+        "message": f"正在后台识别 {len(channels_to_recognize)} 个频道，请稍后刷新查看结果",
+        "total": len(channels_to_recognize)
+    })
+if __name__ == '__main__':
+    # Load previous results and channels
+    test_results = load_results()
+    tv_channels = load_channels()
+    groups = load_groups()
+
+    print(f"\n{'='*60}")
+    print(f"IPTV Stream Sniffer Server")
+    print(f"{'='*60}")
+    print(f"Server URL: http://0.0.0.0:9833")
+    print(f"Loaded {len(test_results)} previous test(s)")
+    print(f"Loaded {len(tv_channels)} channel(s) in library")
+    print(f"Debug mode: ON (auto-reload enabled)")
+    print(f"{'='*60}\n")
+
+    # Start Flask server
+    app.run(host='0.0.0.0', port=9833, debug=True, threaded=True)

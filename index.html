@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPTV Stream Sniffer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 data-i18n="title">IPTV Stream Sniffer</h1>
+            <p class="subtitle" data-i18n="subtitle">Test IPTV streams and capture screenshots</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-button active" data-tab="test" data-i18n="streamTest">Stream Test</button>
+            <button class="tab-button" data-tab="channels" data-i18n="tvChannels">TV Channels</button>
+            <button class="tab-button" data-tab="groups" data-i18n="tvGroups">TV Groups</button>
+            <button class="tab-button" data-tab="config" data-i18n="advancedSettings">Advanced Settings</button>
+        </div>
+
+        <!-- Test Tab -->
+        <div id="test-tab" class="tab-content active">
+            <div class="card">
+                <h2 data-i18n="testConfiguration">Test Configuration</h2>
+                <form id="test-form">
+                    <div class="form-group">
+                        <label for="base-url" data-i18n="baseUrl">Base URL:</label>
+                        <input type="text" id="base-url" value="" placeholder="http://192.168.31.2:6666/rtp/{ip}:7777">
+                        <small data-i18n="baseUrlHint">The base URL for IPTV streams (use {ip} as placeholder for IP address)</small>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="start-ip" data-i18n="startIp">Start IP:</label>
+                            <input type="text" id="start-ip" value="" placeholder="111.111.111.1">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="end-ip" data-i18n="endIp">End IP:</label>
+                            <input type="text" id="end-ip" value="" placeholder="111.111.111.256">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" data-i18n="startTest">Start Test</button>
+                </form>
+            </div>
+
+            <div id="progress-container" class="card" style="display: none;">
+                <h2 data-i18n="testProgress">Test Progress</h2>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <p id="progress-text"><span data-i18n="testing">Testing</span>: 0 / 0</p>
+            </div>
+
+            <div id="results-container" class="card" style="display: none;">
+                <div class="results-header">
+                    <h2 data-i18n="testResults">Test Results</h2>
+                    <div class="filter-container">
+                        <div class="filter-buttons">
+                            <button class="btn btn-small filter-btn active" data-filter="all" data-i18n="all">All</button>
+                            <button class="btn btn-small btn-success filter-btn" data-filter="success" data-i18n="success">Success</button>
+                            <button class="btn btn-small btn-warning filter-btn" data-filter="testing" data-i18n="testing">Testing</button>
+                            <button class="btn btn-small btn-danger filter-btn" data-filter="failed" data-i18n="failed">Failed</button>
+                        </div>
+                        <div class="resolution-filters">
+                            <span class="filter-label" data-i18n="resolution">Resolution:</span>
+                            <button class="btn btn-small resolution-filter-btn active" data-resolution="all" data-i18n="all">All</button>
+                            <button class="btn btn-small resolution-filter-btn" data-resolution="4k">4K</button>
+                            <button class="btn btn-small resolution-filter-btn" data-resolution="1080">1080p</button>
+                            <button class="btn btn-small resolution-filter-btn" data-resolution="720">720p</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="results-grid" class="results-grid"></div>
+            </div>
+        </div>
+
+        <!-- TV Channels Tab -->
+        <div id="channels-tab" class="tab-content">
+            <div class="card">
+                <div class="channels-header">
+                    <h2 data-i18n="channelsLibrary">TV Channels Library</h2>
+                    <div class="channels-actions">
+                        <div class="ip-filter-container">
+                            <input type="text" id="ip-filter-input" class="ip-filter-input" data-i18n-placeholder="searchIpOrNameHint" placeholder="输入IP或频道名进行搜索（如 192.168 或 CCTV）" onkeyup="filterChannelsByIPOrName()">
+                        </div>
+                        <button id="test-all-connectivity-btn" class="btn btn-info btn-small">
+                            <span>🔌</span> <span data-i18n="testConnectivity">测试连通性</span>
+                        </button>
+                        <button id="ai-recognize-btn" class="btn btn-warning btn-small">
+                            <span id="ai-recognize-icon">🤖</span> <span data-i18n="aiRecognize">AI识别频道</span>
+                        </button>
+                        <button id="clear-names-btn" class="btn btn-danger btn-small">
+                            <span>🗑️</span> <span data-i18n="clearNames">清空频道名</span>
+                        </button>
+                        <button id="import-m3u-btn" class="btn btn-primary btn-small">
+                            <span>📥</span> <span data-i18n="importM3u">导入M3U</span>
+                        </button>
+                        <button id="export-channels-btn" class="btn btn-success btn-small" data-i18n="exportM3u">Export M3U</button>
+                        <span id="channels-count" style="margin-left: 15px; color: #667eea; font-weight: 600;"></span>
+                    </div>
+                </div>
+
+                <!-- Group Filter Section -->
+                <div class="channels-group-filter">
+                    <div class="filter-section">
+                        <div class="group-filter-label" data-i18n="filterByGroup">Filter by Group:</div>
+                        <div class="group-filter-buttons" id="group-filter-buttons">
+                            <button class="group-filter-btn active" data-group="all" onclick="filterChannelsByGroup('all')">
+                                <span data-i18n="all">All Channels</span>
+                                <span class="filter-count" id="filter-count-all">0</span>
+                            </button>
+                            <!-- Dynamic group buttons will be added here -->
+                        </div>
+                    </div>
+
+                    <div class="filter-section">
+                        <div class="group-filter-label" data-i18n="filterByResolution">按分辨率筛选</div>
+                        <div class="resolution-filter-buttons">
+                            <button class="resolution-filter-btn active" data-resolution="all" onclick="filterChannelsByResolution('all')">
+                                全部
+                                <span class="filter-count" id="resolution-count-all">0</span>
+                            </button>
+                            <button class="resolution-filter-btn" data-resolution="4k" onclick="filterChannelsByResolution('4k')">
+                                🔵 4K+
+                                <span class="filter-count" id="resolution-count-4k">0</span>
+                            </button>
+                            <button class="resolution-filter-btn" data-resolution="1080" onclick="filterChannelsByResolution('1080')">
+                                🟢 1080p
+                                <span class="filter-count" id="resolution-count-1080">0</span>
+                            </button>
+                            <button class="resolution-filter-btn" data-resolution="720" onclick="filterChannelsByResolution('720')">
+                                🟡 720p
+                                <span class="filter-count" id="resolution-count-720">0</span>
+                            </button>
+                            <button class="resolution-filter-btn" data-resolution="unknown" onclick="filterChannelsByResolution('unknown')">
+                                ⚪ 待检测
+                                <span class="filter-count" id="resolution-count-unknown">0</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="filter-section">
+                        <div class="group-filter-label" data-i18n="filterByConnectivity">连通性筛选</div>
+                        <div class="connectivity-filter-buttons">
+                            <button class="connectivity-filter-btn" data-connectivity="all" onclick="filterChannelsByConnectivity('all')">
+                                全部
+                                <span class="filter-count" id="connectivity-count-all">0</span>
+                            </button>
+                            <button class="connectivity-filter-btn active" data-connectivity="online" onclick="filterChannelsByConnectivity('online')">
+                                🟢 <span data-i18n="online">在线</span>
+                                <span class="filter-count" id="connectivity-count-online">0</span>
+                            </button>
+                            <button class="connectivity-filter-btn" data-connectivity="offline" onclick="filterChannelsByConnectivity('offline')">
+                                🟠 <span data-i18n="offline">离线</span>
+                                <span class="filter-count" id="connectivity-count-offline">0</span>
+                            </button>
+                            <button class="connectivity-filter-btn" data-connectivity="failed" onclick="filterChannelsByConnectivity('failed')">
+                                🔴 <span data-i18n="failed">失败</span>
+                                <span class="filter-count" id="connectivity-count-failed">0</span>
+                            </button>
+                            <button class="connectivity-filter-btn" data-connectivity="testing" onclick="filterChannelsByConnectivity('testing')">
+                                🟡 <span data-i18n="testing">测试中</span>
+                                <span class="filter-count" id="connectivity-count-testing">0</span>
+                            </button>
+                            <button class="connectivity-filter-btn" data-connectivity="untested" onclick="filterChannelsByConnectivity('untested')">
+                                ⚪ <span data-i18n="untested">未测试</span>
+                                <span class="filter-count" id="connectivity-count-untested">0</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="channels-table-container">
+                    <table id="channels-table" class="channels-table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="screenshot">截图</th>
+                                <th data-i18n="logo">台标</th>
+                                <th data-i18n="ip">IP</th>
+                                <th data-i18n="channelName">频道名</th>
+                                <th data-i18n="tvgId">TVG ID</th>
+                                <th data-i18n="resolution">分辨率</th>
+                                <th data-i18n="connectivity">连通性</th>
+                                <th data-i18n="group">分组</th>
+                                <th data-i18n="url">URL</th>
+                                <th data-i18n="playback">回放</th>
+                                <th data-i18n="updateTime">更新时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="channels-tbody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Groups Tab -->
+        <div id="groups-tab" class="tab-content">
+            <div class="card">
+                <div class="groups-header">
+                    <h2 data-i18n="groupsManagement">Groups Management</h2>
+                    <button id="add-group-btn" class="btn btn-primary btn-small">
+                        <span>➕</span> <span data-i18n="newGroup">New Group</span>
+                    </button>
+                </div>
+
+                <div class="groups-container">
+                    <!-- Left: Groups List -->
+                    <div class="groups-list-section">
+                        <div class="groups-list-header">
+                            <h3 data-i18n="groups">Groups</h3>
+                            <small class="groups-list-hint" data-i18n="dragToReorder">Drag to reorder</small>
+                        </div>
+                        <ul id="groups-list" class="groups-list">
+                            <!-- Groups will be loaded here -->
+                        </ul>
+                    </div>
+
+                    <!-- Right: Group Channels -->
+                    <div class="group-channels-section">
+                        <div class="group-channels-header">
+                            <h3 id="group-channels-title" data-i18n="selectGroup">Select a group</h3>
+                            <div class="group-actions" id="group-actions" style="display: none;">
+                                <button id="add-channels-btn" class="btn btn-success btn-small">
+                                    <span>➕</span> <span data-i18n="addChannels">Add Channels</span>
+                                </button>
+                                <button id="remove-channels-btn" class="btn btn-danger btn-small">
+                                    <span>➖</span> <span data-i18n="removeSelected">Remove Selected</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="group-channels-select-all" id="group-channels-select-all" style="display: none;">
+                            <input type="checkbox" id="select-all-group-channels" onchange="toggleSelectAllGroupChannels()">
+                            <label for="select-all-group-channels" data-i18n="selectAll">Select All</label>
+                        </div>
+                        <div id="group-channels-list" class="group-channels-list">
+                            <!-- Channels in selected group will be shown here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add Channels Modal -->
+            <div id="add-channels-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 data-i18n="addChannelsToGroup">Add Channels to Group</h3>
+                        <span class="modal-close-btn" onclick="closeAddChannelsModal()">&times;</span>
+                    </div>
+                    <div class="modal-body">
+                        <div class="channel-select-header">
+                            <input type="checkbox" id="select-all-channels" onchange="toggleSelectAll()">
+                            <label for="select-all-channels" data-i18n="selectAll">Select All</label>
+                            <input type="text" id="channel-search" data-i18n-placeholder="searchChannels" placeholder="Search channels..." class="channel-search">
+                        </div>
+                        <div id="available-channels-list" class="available-channels-list">
+                            <!-- Available channels will be loaded here -->
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-primary" onclick="confirmAddChannels()" data-i18n="confirm">Confirm</button>
+                        <button class="btn" onclick="closeAddChannelsModal()" data-i18n="cancel">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Config Tab -->
+        <div id="config-tab" class="tab-content">
+            <div class="card">
+                <h2 data-i18n="advancedSettingsTitle">Advanced Settings</h2>
+                <form id="config-form">
+                    <div class="form-group">
+                        <label for="language-select">语言 / Language:</label>
+                        <select id="language-select" class="language-select" onchange="switchLanguage(this.value)">
+                            <option value="zh">🇨🇳 中文</option>
+                            <option value="en">🇺🇸 English</option>
+                        </select>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <div class="form-group">
+                        <label for="timeout" data-i18n="timeout">Timeout (seconds):</label>
+                        <input type="number" id="timeout" value="" min="1" max="60" placeholder="10">
+                        <small data-i18n="timeoutHint">Maximum time to wait for stream response</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="queue-size" data-i18n="queueSize">Concurrent Queue Size:</label>
+                        <input type="number" id="queue-size" value="" min="1" max="20" placeholder="5">
+                        <small data-i18n="queueSizeHint">Number of streams to test simultaneously (default: 5)</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="custom-params" data-i18n="customParams">Custom FFmpeg Parameters:</label>
+                        <textarea id="custom-params" rows="4" placeholder="-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi"></textarea>
+                        <small data-i18n="customParamsHint">Additional FFmpeg parameters (e.g., hardware acceleration)</small>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="aiConfiguration">AI Model Configuration</h3>
+
+                    <div class="form-group">
+                        <label for="ai-enabled">
+                            <input type="checkbox" id="ai-enabled" style="margin-right: 8px;">
+                            <span data-i18n="enableAi">Enable AI Channel Recognition</span>
+                        </label>
+                        <small data-i18n="enableAiHint">Enable AI model to automatically recognize channel names from screenshots</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-api-url" data-i18n="aiApiUrl">AI API URL:</label>
+                        <input type="text" id="ai-api-url" placeholder="https://api.openai.com/v1/chat/completions">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-api-key" data-i18n="apiKey">API Key:</label>
+                        <input type="password" id="ai-api-key" placeholder="sk-...">
+                        <small data-i18n="apiKeyHint">Your AI model API key (will be stored securely)</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ai-model" data-i18n="model">Model:</label>
+                        <input type="text" id="ai-model" value="gpt-4-vision-preview" placeholder="gpt-4-vision-preview">
+                        <small data-i18n="modelHint">AI model name (e.g., gpt-4-vision-preview, claude-3-opus)</small>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" data-i18n="saveConfig">Save Configuration</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Image Modal -->
+    <div id="image-modal" class="image-modal">
+        <span class="modal-close">&times;</span>
+        <img class="modal-image" id="modal-img" src="">
+    </div>
+
+    <!-- Channel Group Selection Modal -->
+    <div id="channel-group-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="width: 400px;">
+            <div class="modal-header">
+                <h3>Select Groups for Channel</h3>
+                <span class="modal-close-btn" onclick="closeChannelGroupModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p id="channel-group-modal-ip" style="color: #666; margin-bottom: 15px;"></p>
+                <div id="channel-group-list" class="channel-group-list">
+                    <!-- Group checkboxes will be added here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="saveChannelGroups()">Save</button>
+                <button class="btn" onclick="closeChannelGroupModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import M3U Modal -->
+    <div id="import-m3u-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="width: 500px;">
+            <div class="modal-header">
+                <h3 data-i18n="importM3uTitle">导入M3U文件</h3>
+                <span class="modal-close-btn" onclick="closeImportM3uModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="m3u-file-input" data-i18n="selectM3uFile">选择M3U文件：</label>
+                    <input type="file" id="m3u-file-input" accept=".m3u,.m3u8" style="display: block; margin-top: 10px;">
+                    <small data-i18n="m3uFileHint">支持 .m3u 和 .m3u8 格式</small>
+                </div>
+                <div id="import-progress" style="display: none; margin-top: 20px;">
+                    <p id="import-status" style="color: #667eea; font-weight: 600;"></p>
+                    <div class="progress-bar">
+                        <div id="import-progress-fill" class="progress-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+                <div id="import-result" style="display: none; margin-top: 20px; padding: 15px; background: #f0f9ff; border-radius: 8px;">
+                    <p id="import-result-text" style="margin: 0; color: #0369a1; font-weight: 600;"></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="startImportM3u()" id="import-confirm-btn" data-i18n="startImport">开始导入</button>
+                <button class="btn" onclick="closeImportM3uModal()" data-i18n="cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/languages.js"></script>
+    <script src="/static/script.js"></script>
+</body>
+</html>

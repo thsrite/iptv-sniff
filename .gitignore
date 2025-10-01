@@ -1,0 +1,42 @@
+# Configuration and user data
+config/
+screenshots/
+*.db
+*.sqlite
+*.log
+
+# Downloads
+downloads/
+
+# System files
+.DS_Store
+Thumbs.db
+.claude
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.cache/.claude

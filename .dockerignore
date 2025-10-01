@@ -1,0 +1,79 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.vim
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temp files
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+*.orig
+*~
+
+# Downloads and config (will be created in container)
+downloads/
+config/*.json
+config/*.txt
+!config/.gitkeep
+
+# Development and testing
+tests/
+*_test.py
+test_*
+*.md
+!README.md
+.env
+.env.*
+
+# Docker and CI
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+*.tar
+*.gz
+
+# Documentation
+docs/
+*.rst
+LICENSE
+CHANGELOG*
+
+# Build artifacts
+*.o
+*.exe
+*.dll
+*.dylib
