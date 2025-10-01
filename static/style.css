@@ -1814,8 +1814,39 @@ textarea {
 
 /* Responsive */
 @media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+
     header h1 {
-        font-size: 2rem;
+        font-size: 1.8rem;
+    }
+
+    .subtitle {
+        font-size: 0.9rem;
+    }
+
+    /* Tabs */
+    .tabs {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .tabs::-webkit-scrollbar {
+        display: none;
+    }
+
+    .tab-button {
+        font-size: 0.85rem;
+        padding: 10px 15px;
+        white-space: nowrap;
+    }
+
+    /* Cards */
+    .card {
+        padding: 15px;
     }
 
     .form-row {
@@ -1830,6 +1861,24 @@ textarea {
         flex-direction: column;
         align-items: flex-start;
         gap: 15px;
+    }
+
+    /* Filter buttons */
+    .filter-container {
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+    }
+
+    .filter-buttons,
+    .resolution-filters {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+    }
+
+    .btn-small {
+        font-size: 0.8rem;
+        padding: 6px 10px;
     }
 
     /* Channel cards responsive */
@@ -1852,5 +1901,299 @@ textarea {
 
     .channel-name {
         min-width: 100%;
+    }
+
+    /* Channels header */
+    .channels-header {
+        flex-direction: column;
+        gap: 10px;
+        align-items: stretch;
+    }
+
+    .channels-actions {
+        flex-direction: column;
+        gap: 8px;
+        width: 100%;
+    }
+
+    .channels-actions button {
+        width: 100%;
+    }
+
+    .ip-filter-container {
+        width: 100%;
+    }
+
+    .ip-filter-input {
+        width: 100%;
+    }
+
+    /* Channel filters */
+    .channel-filters {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .filter-section {
+        width: 100%;
+    }
+
+    .group-filter-buttons,
+    .resolution-filter-buttons,
+    .connectivity-filter-buttons {
+        flex-wrap: wrap;
+    }
+
+    /* Channel table */
+    .channels-table-container {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .channels-table {
+        min-width: 800px;
+    }
+
+    .channels-table th,
+    .channels-table td {
+        padding: 8px 4px;
+        font-size: 0.85rem;
+    }
+
+    .channel-field {
+        min-width: 80px;
+        font-size: 0.85rem;
+    }
+
+    /* Screenshot and logo smaller on mobile */
+    .screenshot-preview,
+    .logo-preview-merged {
+        width: 70px;
+        height: 40px;
+    }
+
+    /* Groups management */
+    .groups-container {
+        display: flex;
+        flex-direction: column;
+        grid-template-columns: unset;
+    }
+
+    .groups-list-section {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #e0e0e0;
+        padding-right: 0;
+        padding-bottom: 15px;
+        margin-bottom: 15px;
+    }
+
+    .groups-content {
+        width: 100%;
+    }
+
+    .group-channels-section {
+        padding-left: 0;
+    }
+
+    .group-channels-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .group-channels-header h3 {
+        font-size: 1.2rem;
+    }
+
+    .group-channels-list {
+        max-height: 400px;
+    }
+
+    .group-actions {
+        flex-direction: row;
+        width: 100%;
+        gap: 8px;
+    }
+
+    .group-actions button {
+        flex: 1;
+        min-width: calc(50% - 4px);
+    }
+
+    .group-channel-item {
+        padding: 10px 8px;
+    }
+
+    .group-channel-screenshot {
+        width: 60px;
+        height: 35px;
+    }
+
+    /* Modals */
+    .modal-content {
+        width: 95%;
+        max-width: 95%;
+        max-height: 90vh;
+        margin: 5vh auto;
+    }
+
+    .modal-actions {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .modal-actions button {
+        width: 100%;
+    }
+
+    /* Image modal */
+    .image-modal-content {
+        width: 95%;
+        max-width: 95%;
+        padding: 10px;
+    }
+
+    .image-modal-content img {
+        max-height: 60vh;
+    }
+
+    /* Logo URL editor */
+    .logo-url-editor {
+        width: 90%;
+        bottom: 10px;
+    }
+
+    .logo-url-input {
+        font-size: 0.85rem;
+    }
+
+    /* Config page */
+    .config-section {
+        padding: 15px;
+    }
+
+    /* Language switcher */
+    .language-switcher {
+        flex-wrap: wrap;
+    }
+
+    .lang-btn {
+        font-size: 0.85rem;
+        padding: 6px 15px;
+    }
+
+    /* Sortable items */
+    .sortable-item {
+        padding: 10px;
+    }
+
+    /* Draggable channel */
+    .draggable-channel {
+        padding: 8px;
+    }
+
+    /* Result card */
+    .result-card {
+        padding: 10px;
+    }
+
+    .result-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .retry-btn {
+        width: 100%;
+        margin-top: 8px;
+    }
+}
+
+/* Extra small devices */
+@media (max-width: 480px) {
+    body {
+        padding: 5px;
+    }
+
+    header {
+        margin-bottom: 15px;
+    }
+
+    header h1 {
+        font-size: 1.5rem;
+    }
+
+    .subtitle {
+        font-size: 0.8rem;
+    }
+
+    .tab-button {
+        font-size: 0.75rem;
+        padding: 8px 12px;
+    }
+
+    .card {
+        padding: 10px;
+    }
+
+    .btn {
+        font-size: 0.85rem;
+        padding: 8px 16px;
+    }
+
+    .btn-small {
+        font-size: 0.75rem;
+        padding: 5px 8px;
+    }
+
+    /* Even smaller table elements */
+    .channels-table th,
+    .channels-table td {
+        padding: 6px 3px;
+        font-size: 0.75rem;
+    }
+
+    .screenshot-preview,
+    .logo-preview-merged {
+        width: 60px;
+        height: 35px;
+    }
+
+    /* Group filter buttons */
+    .group-filter-btn,
+    .resolution-filter-btn,
+    .connectivity-filter-btn {
+        font-size: 0.75rem;
+        padding: 5px 10px;
+    }
+
+    /* Modal content */
+    .modal-content {
+        padding: 15px;
+    }
+
+    .modal-header h2 {
+        font-size: 1.2rem;
+    }
+
+    /* Groups on very small screens */
+    .group-channels-header h3 {
+        font-size: 1rem;
+    }
+
+    .group-channel-screenshot {
+        width: 50px;
+        height: 30px;
+    }
+
+    .sortable-item {
+        padding: 8px;
+        font-size: 0.85rem;
+    }
+
+    .group-actions button {
+        font-size: 0.75rem;
+        padding: 6px 10px;
     }
 }

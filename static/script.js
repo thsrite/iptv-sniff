@@ -778,9 +778,12 @@ function addTestSelector(sortedTests) {
 
         // Add delete button
         const deleteBtn = document.createElement('button');
-        deleteBtn.textContent = '🗑️ Delete';
+        deleteBtn.textContent = '🗑️';
         deleteBtn.className = 'btn btn-danger btn-small';
         deleteBtn.style.marginLeft = '10px';
+        deleteBtn.style.padding = '6px 12px';
+        deleteBtn.style.fontSize = '1rem';
+        deleteBtn.title = 'Delete';
         deleteBtn.id = 'delete-test-btn';
         selectorContainer.appendChild(deleteBtn);
 
