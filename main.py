@@ -10,6 +10,7 @@ from datetime import datetime
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import uuid
+from db import Database
 
 app = Flask(__name__)
 CORS(app)
@@ -18,9 +19,6 @@ CORS(app)
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(__file__), 'screenshots')
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), 'config')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
-RESULTS_FILE = os.path.join(CONFIG_DIR, 'results.json')
-CHANNELS_FILE = os.path.join(CONFIG_DIR, 'channels.json')
-GROUPS_FILE = os.path.join(CONFIG_DIR, 'groups.json')
 
 # Ensure directories exist
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -33,6 +31,9 @@ tv_channels = {}  # Store successful channels
 groups = {}  # Store channel groups
 file_write_lock = threading.Lock()  # Only for file writing
 current_test_id = None
+
+# Initialize database
+db = None
 
 
 
@@ -56,23 +57,21 @@ def save_config(config):
 
 
 def load_channels():
-    """Load TV channels from file"""
+    """Load TV channels from database"""
     global tv_channels
-    if os.path.exists(CHANNELS_FILE):
-        try:
-            with open(CHANNELS_FILE, 'r', encoding='utf-8') as f:
-                tv_channels = json.load(f)
-        except:
-            tv_channels = {}
+    try:
+        tv_channels = db.get_all_channels()
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error loading channels: {str(e)}")
+        tv_channels = {}
     return tv_channels
 
 
 def save_channels():
-    """Save TV channels to file"""
+    """Save TV channels to database"""
     try:
         with file_write_lock:
-            with open(CHANNELS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(copy.deepcopy(tv_channels), f, indent=2, ensure_ascii=False)
+            db.save_channels(copy.deepcopy(tv_channels))
     except Exception as e:
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error saving channels: {str(e)}")
 
@@ -224,24 +223,21 @@ def update_channel_library(ip, result):
 
 
 def load_results():
-    """Load test results from file"""
-    if os.path.exists(RESULTS_FILE):
-        try:
-            with open(RESULTS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+    """Load test results from database"""
+    try:
+        return db.get_all_results()
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error loading results: {str(e)}")
+        return {}
 
 
 def save_results():
-    """Save test results to file - only lock during actual file write"""
+    """Save test results to database - only lock during actual write"""
     try:
-        # Only lock the actual file write operation
+        # Only lock the actual write operation
         with file_write_lock:
-            with open(RESULTS_FILE, 'w', encoding='utf-8') as f:
-                # Make a copy to avoid issues during serialization
-                json.dump(copy.deepcopy(test_results), f, indent=2, ensure_ascii=False)
+            # Make a copy to avoid issues during serialization
+            db.save_results(copy.deepcopy(test_results))
     except Exception as e:
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error in save_results: {str(e)}")
         import traceback
@@ -857,7 +853,13 @@ def get_all_results():
 
 @app.route('/api/channels')
 def get_channels():
-    """Get all successful TV channels with group information"""
+    """Get all successful TV channels with group information and filtering"""
+    # Get filter parameters
+    group_filter = request.args.get('group', 'all')
+    resolution_filter = request.args.get('resolution', 'all')
+    connectivity_filter = request.args.get('connectivity', 'all')
+    search_filter = request.args.get('search', '').lower()
+
     channels_with_groups = copy.deepcopy(tv_channels)
 
     # Add group information to each channel
@@ -871,7 +873,199 @@ def get_channels():
                 })
         channel['groups'] = channel_groups
 
-    return jsonify({"status": "success", "channels": channels_with_groups})
+    # Calculate statistics BEFORE filtering (for filter counts)
+    stats = {
+        'total': len(channels_with_groups),
+        'resolution': {
+            '4k': 0,
+            '1080': 0,
+            '720': 0,
+            'unknown': 0
+        },
+        'connectivity': {
+            'online': 0,
+            'offline': 0,
+            'failed': 0,
+            'testing': 0,
+            'untested': 0
+        },
+        'groups': {}
+    }
+
+    for ip, channel in channels_with_groups.items():
+        # Count resolutions
+        resolution = channel.get('resolution', '')
+        if resolution:
+            try:
+                width_str, height_str = resolution.split('x')
+                width = int(width_str)
+                height = int(height_str)
+                is_720p = (width == 720 and height == 576) or (width >= 1280 and width < 1920)
+
+                if width >= 3840:
+                    stats['resolution']['4k'] += 1
+                elif width >= 1920 and width < 3840:
+                    stats['resolution']['1080'] += 1
+                elif is_720p:
+                    stats['resolution']['720'] += 1
+            except:
+                stats['resolution']['unknown'] += 1
+        else:
+            stats['resolution']['unknown'] += 1
+
+        # Count connectivity
+        connectivity = channel.get('connectivity', 'untested')
+        if connectivity in stats['connectivity']:
+            stats['connectivity'][connectivity] += 1
+
+        # Count groups
+        channel_groups = channel.get('groups', [])
+        for group in channel_groups:
+            group_id = group['id']
+            if group_id not in stats['groups']:
+                # Get sort_order from groups global variable
+                sort_order = groups.get(group_id, {}).get('sort_order', 9999)
+                stats['groups'][group_id] = {
+                    'name': group['name'],
+                    'count': 0,
+                    'sort_order': sort_order
+                }
+            stats['groups'][group_id]['count'] += 1
+
+    # Count ungrouped channels
+    ungrouped_count = sum(1 for ch in channels_with_groups.values() if not ch.get('groups'))
+    if ungrouped_count > 0:
+        stats['groups']['ungrouped'] = {
+            'name': 'Ungrouped',
+            'count': ungrouped_count,
+            'sort_order': 10000  # Ungrouped always last
+        }
+
+    # Apply filters
+    filtered_list = []
+
+    for ip, channel in channels_with_groups.items():
+        # Group filter
+        if group_filter != 'all':
+            channel_group_ids = [g['id'] for g in channel.get('groups', [])]
+            if group_filter == 'ungrouped':
+                if len(channel_group_ids) > 0:
+                    continue
+            else:
+                if group_filter not in channel_group_ids:
+                    continue
+
+        # Connectivity filter
+        if connectivity_filter != 'all':
+            connectivity = channel.get('connectivity', 'untested')
+            if connectivity_filter == 'online' and connectivity != 'online':
+                continue
+            elif connectivity_filter == 'offline' and connectivity != 'offline':
+                continue
+            elif connectivity_filter == 'failed' and connectivity != 'failed':
+                continue
+            elif connectivity_filter == 'testing' and connectivity != 'testing':
+                continue
+            elif connectivity_filter == 'untested' and connectivity != 'untested':
+                continue
+
+        # Resolution filter
+        if resolution_filter != 'all':
+            resolution = channel.get('resolution', '')
+            if resolution_filter == 'unknown':
+                if resolution:
+                    continue
+            else:
+                if not resolution:
+                    continue
+                try:
+                    width_str, height_str = resolution.split('x')
+                    width = int(width_str)
+                    height = int(height_str)
+
+                    is_720p = (width == 720 and height == 576) or (width >= 1280 and width < 1920)
+
+                    if resolution_filter == '4k' and width < 3840:
+                        continue
+                    elif resolution_filter == '1080' and (width < 1920 or width >= 3840):
+                        continue
+                    elif resolution_filter == '720' and not is_720p:
+                        continue
+                except:
+                    if resolution_filter != 'unknown':
+                        continue
+
+        # Search filter (IP or channel name)
+        if search_filter:
+            channel_name = channel.get('name', '').lower()
+            if search_filter not in ip and search_filter not in channel_name:
+                continue
+
+        filtered_list.append((ip, channel))
+
+    # Sort filtered channels
+    # Sorting rules:
+    # 1. Group sort order (grouped channels first, sorted by group order)
+    # 2. Resolution (higher resolution first within same group)
+    # 3. Channel name (natural sorting for names with numbers)
+    # 4. Test status (test_status='failed' channels go to the bottom)
+    def sort_key(item):
+        ip, channel = item
+
+        # 1. Group sort order - get minimum sort_order from all groups this channel belongs to
+        min_sort_order = 9999
+        for group in channel.get('groups', []):
+            group_id = group['id']
+            if group_id in groups:
+                sort_order = groups[group_id].get('sort_order', 9999)
+                if sort_order < min_sort_order:
+                    min_sort_order = sort_order
+
+        # 2. Resolution (descending - higher resolution first)
+        resolution = channel.get('resolution', '')
+        resolution_width = 0
+        if resolution:
+            try:
+                resolution_width = -int(resolution.split('x')[0])
+            except:
+                resolution_width = 0
+
+        # 3. Channel name (empty names go last within same group)
+        # Use natural sorting for names with numbers (e.g., CCTV1, CCTV2, CCTV11)
+        name = channel.get('name', '').strip()
+        if not name:
+            name_order = (1, [])  # Empty names go last
+        else:
+            # Split name into text and number parts for natural sorting
+            import re
+            parts = re.split(r'(\d+)', name.lower())
+            # Convert numeric parts to integers for proper sorting
+            sorted_parts = []
+            for part in parts:
+                if part.isdigit():
+                    sorted_parts.append((0, int(part)))  # (0, num) for numbers
+                else:
+                    sorted_parts.append((1, part))  # (1, str) for text
+            name_order = (0, sorted_parts)  # Names with content come first
+
+        # 4. Test status - failed tests go last
+        test_status = channel.get('test_status', 'success')
+        test_status_order = 1 if test_status == 'failed' else 0
+
+        return (min_sort_order, resolution_width, name_order, test_status_order)
+
+    sorted_list = sorted(filtered_list, key=sort_key)
+
+    # Convert to list of objects to preserve order (dict loses order in JSON)
+    filtered_channels_list = [
+        {"ip": ip, **channel} for ip, channel in sorted_list
+    ]
+
+    return jsonify({
+        "status": "success",
+        "channels": filtered_channels_list,
+        "stats": stats
+    })
 
 
 
@@ -895,6 +1089,8 @@ def update_channel_name():
             tv_channels[ip]['group'] = data.get('group', '')
         if 'playback' in data:
             tv_channels[ip]['playback'] = data.get('playback', '')
+        if 'catchup' in data:
+            tv_channels[ip]['catchup'] = data.get('catchup', '')
         if 'logo' in data:
             tv_channels[ip]['logo'] = data.get('logo', '')
 
@@ -945,25 +1141,27 @@ def serve_logo(filename):
 
 # Groups management functions
 def load_groups():
-    """Load groups from file"""
+    """Load groups from database"""
     try:
-        if os.path.exists(GROUPS_FILE):
-            with open(GROUPS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get('groups', {})
-        return {}
+        return db.get_all_groups()
     except Exception as e:
         print(f"Error loading groups: {str(e)}")
         return {}
 
 def save_groups():
-    """Save groups to file"""
+    """Save groups to database"""
     try:
         with file_write_lock:
-            with open(GROUPS_FILE, 'w', encoding='utf-8') as f:
-                json.dump({'groups': groups}, f, indent=2, ensure_ascii=False)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saving {len(groups)} groups to database...")
+            # Log channel counts for debugging
+            for gid, gdata in list(groups.items())[:3]:
+                print(f"  Group {gdata.get('name', '')}: {len(gdata.get('channels', []))} channels")
+            db.save_groups(groups)
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Groups saved successfully")
     except Exception as e:
-        print(f"Error saving groups: {str(e)}")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error saving groups: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 @app.route('/api/groups')
 def get_groups():
@@ -1756,6 +1954,10 @@ def recognize_channels():
         "total": len(channels_to_recognize)
     })
 if __name__ == '__main__':
+    # Initialize database
+    config = load_config()
+    db = Database(config)
+
     # Load previous results and channels
     test_results = load_results()
     tv_channels = load_channels()
@@ -1765,8 +1967,10 @@ if __name__ == '__main__':
     print(f"IPTV Stream Sniffer Server")
     print(f"{'='*60}")
     print(f"Server URL: http://0.0.0.0:9833")
+    print(f"Database: {config.get('database', {}).get('type', 'json').upper()}")
     print(f"Loaded {len(test_results)} previous test(s)")
     print(f"Loaded {len(tv_channels)} channel(s) in library")
+    print(f"Loaded {len(groups)} group(s)")
     print(f"Debug mode: ON (auto-reload enabled)")
     print(f"{'='*60}\n")
 

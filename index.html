@@ -145,11 +145,11 @@
                     <div class="filter-section">
                         <div class="group-filter-label" data-i18n="filterByConnectivity">连通性筛选</div>
                         <div class="connectivity-filter-buttons">
-                            <button class="connectivity-filter-btn" data-connectivity="all" onclick="filterChannelsByConnectivity('all')">
+                            <button class="connectivity-filter-btn active" data-connectivity="all" onclick="filterChannelsByConnectivity('all')">
                                 全部
                                 <span class="filter-count" id="connectivity-count-all">0</span>
                             </button>
-                            <button class="connectivity-filter-btn active" data-connectivity="online" onclick="filterChannelsByConnectivity('online')">
+                            <button class="connectivity-filter-btn" data-connectivity="online" onclick="filterChannelsByConnectivity('online')">
                                 🟢 <span data-i18n="online">在线</span>
                                 <span class="filter-count" id="connectivity-count-online">0</span>
                             </button>
@@ -299,6 +299,47 @@
                         <label for="custom-params" data-i18n="customParams">Custom FFmpeg Parameters:</label>
                         <textarea id="custom-params" rows="4" placeholder="-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi"></textarea>
                         <small data-i18n="customParamsHint">Additional FFmpeg parameters (e.g., hardware acceleration)</small>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <h3 style="color: #667eea; margin-bottom: 20px;">数据库配置 / Database Configuration</h3>
+
+                    <div class="form-group">
+                        <label for="db-type">数据库类型 / Database Type:</label>
+                        <select id="db-type" onchange="toggleDatabaseConfig()">
+                            <option value="json">JSON File (默认 / Default)</option>
+                            <option value="sqlite">SQLite (config/iptv.db)</option>
+                            <option value="postgresql">PostgreSQL</option>
+                        </select>
+                        <small>选择数据存储方式 / Select data storage method</small>
+                    </div>
+
+                    <div id="postgresql-config" style="display: none;">
+                        <div class="form-group">
+                            <label for="pg-host">主机 / Host:</label>
+                            <input type="text" id="pg-host" value="localhost" placeholder="localhost">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pg-port">端口 / Port:</label>
+                            <input type="number" id="pg-port" value="5432" placeholder="5432">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pg-database">数据库名 / Database:</label>
+                            <input type="text" id="pg-database" value="iptv" placeholder="iptv">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pg-user">用户名 / User:</label>
+                            <input type="text" id="pg-user" value="postgres" placeholder="postgres">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="pg-password">密码 / Password:</label>
+                            <input type="password" id="pg-password" placeholder="password">
+                        </div>
                     </div>
 
                     <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">

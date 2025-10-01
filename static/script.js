@@ -26,10 +26,8 @@ document.querySelectorAll('.tab-button').forEach(button => {
 
         // Load channels when switching to channels tab
         if (tabName === 'channels') {
-            // Load groups first (needed for both filter and modal)
-            loadGroups().then(() => {
-                loadChannels();
-            });
+            // loadChannels() will load groups if needed (avoiding duplicate API calls)
+            loadChannels();
         }
 
         // Load groups when switching to groups tab
@@ -85,6 +83,12 @@ document.getElementById('test-form').addEventListener('submit', async (e) => {
     }
 });
 
+// Toggle database configuration visibility
+function toggleDatabaseConfig() {
+    const dbType = document.getElementById('db-type').value;
+    document.getElementById('postgresql-config').style.display = dbType === 'postgresql' ? 'block' : 'none';
+}
+
 // Config form submission
 document.getElementById('config-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -94,6 +98,24 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     const queueSizeValue = document.getElementById('queue-size').value;
     const queueSize = queueSizeValue ? parseInt(queueSizeValue) : 5; // Default to 5 if empty
     const customParams = document.getElementById('custom-params').value;
+
+    // Get database configuration
+    const dbType = document.getElementById('db-type').value;
+    const database = {
+        type: dbType
+    };
+
+    if (dbType === 'sqlite') {
+        database.sqlite_path = 'config/iptv.db';  // Fixed path for SQLite
+    } else if (dbType === 'postgresql') {
+        database.postgresql = {
+            host: document.getElementById('pg-host').value || 'localhost',
+            port: parseInt(document.getElementById('pg-port').value) || 5432,
+            database: document.getElementById('pg-database').value || 'iptv',
+            user: document.getElementById('pg-user').value || 'postgres',
+            password: document.getElementById('pg-password').value || ''
+        };
+    }
 
     // Get AI model configuration
     const aiEnabled = document.getElementById('ai-enabled').checked;
@@ -111,6 +133,7 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
                 timeout: timeout,
                 queue_size: queueSize,
                 custom_params: customParams,
+                database: database,
                 ai_model: {
                     enabled: aiEnabled,
                     api_url: aiApiUrl,
@@ -123,7 +146,7 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
         const data = await response.json();
 
         if (data.status === 'success') {
-            alert('Configuration saved successfully!');
+            alert('Configuration saved successfully! Please restart the application to apply database changes.');
         }
     } catch (error) {
         alert('Failed to save configuration: ' + error.message);
@@ -226,6 +249,22 @@ async function loadConfig() {
 
         document.getElementById('custom-params').value = config.custom_params || '';
 
+        // Load database configuration
+        if (config.database) {
+            document.getElementById('db-type').value = config.database.type || 'json';
+
+            if (config.database.type === 'postgresql' && config.database.postgresql) {
+                document.getElementById('pg-host').value = config.database.postgresql.host || 'localhost';
+                document.getElementById('pg-port').value = config.database.postgresql.port || 5432;
+                document.getElementById('pg-database').value = config.database.postgresql.database || 'iptv';
+                document.getElementById('pg-user').value = config.database.postgresql.user || 'postgres';
+                document.getElementById('pg-password').value = config.database.postgresql.password || '';
+            }
+
+            // Show/hide appropriate config sections
+            toggleDatabaseConfig();
+        }
+
         // Load AI model configuration
         if (config.ai_model) {
             document.getElementById('ai-enabled').checked = config.ai_model.enabled || false;
@@ -305,9 +344,11 @@ async function checkTestStatus() {
 
 // Update progress bar
 function updateProgress(data) {
-    const percentage = (data.completed / data.total) * 100;
+    const completed = data.completed || 0;
+    const total = data.total || 0;
+    const percentage = total > 0 ? (completed / total) * 100 : 0;
     document.getElementById('progress-fill').style.width = percentage + '%';
-    document.getElementById('progress-text').textContent = `Testing: ${data.completed} / ${data.total}`;
+    document.getElementById('progress-text').textContent = `Testing: ${completed} / ${total}`;
 }
 
 // Update results display
@@ -842,13 +883,33 @@ function addTestSelector(sortedTests) {
 // TV Channels Management
 // Global variable to store all channels and groups
 let allChannels = {};
+let allChannelsCache = null;  // Cache all channels (without filters) to avoid duplicate API calls
 let allGroupsCache = {};  // Cache groups data for sorting
+let channelStats = null;  // Statistics from backend
 let currentGroupFilter = 'all';
 let currentChannelResolutionFilter = 'all';  // Default to 'all'
-let currentConnectivityFilter = 'online';  // Default to 'online'
+let currentConnectivityFilter = 'all';  // Default to 'all' (show all channels)
 let currentIPFilter = '';
+let isLoadingChannels = false;  // Flag to prevent duplicate API calls
+let isLoadingGroups = false;  // Flag to prevent duplicate groups API calls
+
+// Helper function to clear groups cache when groups data changes
+function clearGroupsCache() {
+    allGroupsCache = {};
+}
 
 async function loadChannels() {
+    // Prevent duplicate API calls
+    if (isLoadingChannels) {
+        console.log('loadChannels already in progress, skipping...');
+        return;
+    }
+
+    isLoadingChannels = true;
+
+    // Clear cache to ensure fresh data is loaded
+    allChannelsCache = null;
+
     try {
         // Restore saved filters or use defaults
         const savedConnectivityFilter = localStorage.getItem('connectivityFilter');
@@ -872,19 +933,42 @@ async function loadChannels() {
             localStorage.setItem('resolutionFilter', currentChannelResolutionFilter);
         }
 
-        // Load channels
-        const response = await fetch('/api/channels');
-        const data = await response.json();
+        // Build API URL with filter parameters
+        const params = new URLSearchParams({
+            group: currentGroupFilter,
+            resolution: currentChannelResolutionFilter,
+            connectivity: currentConnectivityFilter,
+            search: currentIPFilter
+        });
 
-        // Also load groups for sorting
-        const groupsResponse = await fetch('/api/groups');
-        const groupsData = await groupsResponse.json();
-        if (groupsData.status === 'success') {
-            allGroupsCache = groupsData.groups;
+        // Load groups first if not cached (avoid duplicate API calls)
+        if (Object.keys(allGroupsCache).length === 0 && !isLoadingGroups) {
+            isLoadingGroups = true;
+            try {
+                const groupsResponse = await fetch('/api/groups');
+                const groupsData = await groupsResponse.json();
+                if (groupsData.status === 'success') {
+                    allGroupsCache = groupsData.groups;
+                }
+            } catch (error) {
+                console.error('Failed to load groups:', error);
+            } finally {
+                isLoadingGroups = false;
+            }
         }
+
+        // Wait for groups to finish loading if in progress
+        while (isLoadingGroups) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+
+        // Load channels with filters
+        const response = await fetch(`/api/channels?${params}`);
+        const data = await response.json();
 
         if (data.status === 'success') {
             allChannels = data.channels;
+            channelStats = data.stats;  // Save statistics from backend
             updateGroupFilterButtons();
 
             // Restore filter button states after buttons are created
@@ -921,86 +1005,27 @@ async function loadChannels() {
         }
     } catch (error) {
         console.error('Failed to load channels:', error);
+    } finally {
+        isLoadingChannels = false;
     }
 }
 
-// Update group filter buttons
+// Update group filter buttons using backend statistics
 function updateGroupFilterButtons() {
+    if (!channelStats) return;  // Wait for stats from backend
+
     const filterContainer = document.getElementById('group-filter-buttons');
     if (!filterContainer) return;
-
-    // Keep the "All Channels" button
-    const allBtn = filterContainer.querySelector('[data-group="all"]');
 
     // Clear existing group buttons (except "All")
     const existingButtons = filterContainer.querySelectorAll('.group-filter-btn:not([data-group="all"])');
     existingButtons.forEach(btn => btn.remove());
 
-    // Count channels per group and resolution
-    const groupCounts = {};
-    let totalCount = 0;
-    let resolutionCounts = {
-        '4k': 0,
-        '1080': 0,
-        '720': 0,
-        'sd': 0,
-        'unknown': 0
-    };
-    let connectivityCounts = {
-        'online': 0,
-        'offline': 0,
-        'failed': 0,
-        'testing': 0,
-        'untested': 0
-    };
-
-    Object.entries(allChannels).forEach(([ip, channel]) => {
-        totalCount++;
-
-        // Count groups
-        if (channel.groups && channel.groups.length > 0) {
-            channel.groups.forEach(group => {
-                if (!groupCounts[group.id]) {
-                    groupCounts[group.id] = { name: group.name, count: 0 };
-                }
-                groupCounts[group.id].count++;
-            });
-        }
-
-        // Count resolutions
-        if (channel.resolution) {
-            const [widthStr, heightStr] = channel.resolution.split('x');
-            const width = parseInt(widthStr);
-            const height = parseInt(heightStr);
-
-            // Treat 720x576 as 720p
-            const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
-
-            if (width >= 3840) {
-                resolutionCounts['4k']++;
-            } else if (width >= 1920 && width < 3840) {
-                resolutionCounts['1080']++;
-            } else if (is720p) {
-                resolutionCounts['720']++;
-            }
-        } else {
-            resolutionCounts['unknown']++;
-        }
-
-        // Count connectivity
-        const connectivity = channel.connectivity || 'untested';
-        if (connectivity === 'online') {
-            connectivityCounts['online']++;
-        } else if (connectivity === 'offline') {
-            connectivityCounts['offline']++;
-        } else if (connectivity === 'failed') {
-            connectivityCounts['failed']++;
-        } else if (connectivity === 'testing') {
-            connectivityCounts['testing']++;
-        } else {
-            connectivityCounts['untested']++;
-        }
-    });
+    // Use statistics from backend
+    const totalCount = channelStats.total;
+    const resolutionCounts = channelStats.resolution;
+    const connectivityCounts = channelStats.connectivity;
+    const groupCounts = channelStats.groups;
 
     // Update "All Channels" count
     const allCountElement = document.getElementById('filter-count-all');
@@ -1010,21 +1035,27 @@ function updateGroupFilterButtons() {
 
     // Update resolution counts
     document.getElementById('resolution-count-all').textContent = totalCount;
-    document.getElementById('resolution-count-4k').textContent = resolutionCounts['4k'];
-    document.getElementById('resolution-count-1080').textContent = resolutionCounts['1080'];
-    document.getElementById('resolution-count-720').textContent = resolutionCounts['720'];
-    document.getElementById('resolution-count-unknown').textContent = resolutionCounts['unknown'];
+    document.getElementById('resolution-count-4k').textContent = resolutionCounts['4k'] || 0;
+    document.getElementById('resolution-count-1080').textContent = resolutionCounts['1080'] || 0;
+    document.getElementById('resolution-count-720').textContent = resolutionCounts['720'] || 0;
+    document.getElementById('resolution-count-unknown').textContent = resolutionCounts['unknown'] || 0;
 
     // Update connectivity counts
     document.getElementById('connectivity-count-all').textContent = totalCount;
-    document.getElementById('connectivity-count-online').textContent = connectivityCounts['online'];
-    document.getElementById('connectivity-count-offline').textContent = connectivityCounts['offline'];
-    document.getElementById('connectivity-count-failed').textContent = connectivityCounts['failed'];
-    document.getElementById('connectivity-count-testing').textContent = connectivityCounts['testing'];
-    document.getElementById('connectivity-count-untested').textContent = connectivityCounts['untested'];
+    document.getElementById('connectivity-count-online').textContent = connectivityCounts['online'] || 0;
+    document.getElementById('connectivity-count-offline').textContent = connectivityCounts['offline'] || 0;
+    document.getElementById('connectivity-count-failed').textContent = connectivityCounts['failed'] || 0;
+    document.getElementById('connectivity-count-testing').textContent = connectivityCounts['testing'] || 0;
+    document.getElementById('connectivity-count-untested').textContent = connectivityCounts['untested'] || 0;
 
-    // Add buttons for each group
-    Object.entries(groupCounts).forEach(([groupId, groupInfo]) => {
+    // Add buttons for each group from backend stats (sorted by sort_order)
+    const sortedGroups = Object.entries(groupCounts).sort((a, b) => {
+        const orderA = a[1].sort_order || 9999;
+        const orderB = b[1].sort_order || 9999;
+        return orderA - orderB;
+    });
+
+    sortedGroups.forEach(([groupId, groupInfo]) => {
         const btn = document.createElement('button');
         btn.className = 'group-filter-btn';
         btn.dataset.group = groupId;
@@ -1035,23 +1066,6 @@ function updateGroupFilterButtons() {
         btn.onclick = () => filterChannelsByGroup(groupId);
         filterContainer.appendChild(btn);
     });
-
-    // Also add a button for ungrouped channels
-    const ungroupedCount = Object.values(allChannels).filter(
-        ch => !ch.groups || ch.groups.length === 0
-    ).length;
-
-    if (ungroupedCount > 0) {
-        const ungroupedBtn = document.createElement('button');
-        ungroupedBtn.className = 'group-filter-btn';
-        ungroupedBtn.dataset.group = 'ungrouped';
-        ungroupedBtn.innerHTML = `
-            Ungrouped
-            <span class="filter-count">${ungroupedCount}</span>
-        `;
-        ungroupedBtn.onclick = () => filterChannelsByGroup('ungrouped');
-        filterContainer.appendChild(ungroupedBtn);
-    }
 }
 
 // Filter channels by group
@@ -1067,8 +1081,8 @@ function filterChannelsByGroup(groupId) {
     });
     document.querySelector(`[data-group="${groupId}"]`).classList.add('active');
 
-    // Apply both group and resolution filters
-    applyChannelFilters();
+    // Reload channels with new filter from server
+    loadChannels();
 }
 
 // Filter channels by resolution
@@ -1084,8 +1098,8 @@ function filterChannelsByResolution(resolution) {
     });
     document.querySelector(`.resolution-filter-buttons [data-resolution="${resolution}"]`).classList.add('active');
 
-    // Apply both group and resolution filters
-    applyChannelFilters();
+    // Reload channels with new filter from server
+    loadChannels();
 }
 
 // Filter channels by connectivity
@@ -1101,108 +1115,26 @@ function filterChannelsByConnectivity(connectivity) {
     });
     document.querySelector(`[data-connectivity="${connectivity}"]`).classList.add('active');
 
-    // Apply all filters
-    applyChannelFilters();
+    // Reload channels with new filter from server
+    loadChannels();
 }
 
 // Filter channels by IP or channel name (fuzzy search)
 function filterChannelsByIPOrName() {
     const input = document.getElementById('ip-filter-input');
     currentIPFilter = input.value.trim();
-    applyChannelFilters();
+
+    // Reload channels with new search filter from server
+    loadChannels();
 }
 
 // Clear IP filter
 function clearIPFilter() {
     document.getElementById('ip-filter-input').value = '';
     currentIPFilter = '';
-    applyChannelFilters();
-}
 
-// Apply all active filters
-function applyChannelFilters() {
-    let filteredChannels = {};
-
-    // First apply group filter
-    if (currentGroupFilter === 'all') {
-        filteredChannels = {...allChannels};
-    } else if (currentGroupFilter === 'ungrouped') {
-        Object.entries(allChannels).forEach(([ip, channel]) => {
-            if (!channel.groups || channel.groups.length === 0) {
-                filteredChannels[ip] = channel;
-            }
-        });
-    } else {
-        Object.entries(allChannels).forEach(([ip, channel]) => {
-            if (channel.groups && channel.groups.some(g => g.id === currentGroupFilter)) {
-                filteredChannels[ip] = channel;
-            }
-        });
-    }
-
-    // Apply IP or channel name filter (fuzzy search)
-    if (currentIPFilter) {
-        const ipFiltered = {};
-        const searchTerm = currentIPFilter.toLowerCase();
-        Object.entries(filteredChannels).forEach(([ip, channel]) => {
-            // Fuzzy search - check if IP or channel name contains the filter string
-            const channelName = (channel.name || '').toLowerCase();
-            if (ip.includes(currentIPFilter) || channelName.includes(searchTerm)) {
-                ipFiltered[ip] = channel;
-            }
-        });
-        filteredChannels = ipFiltered;
-    }
-
-    // Then apply resolution filter
-    if (currentChannelResolutionFilter !== 'all') {
-        const resolutionFiltered = {};
-        Object.entries(filteredChannels).forEach(([ip, channel]) => {
-            // If filtering for "unknown" (no resolution)
-            if (currentChannelResolutionFilter === 'unknown') {
-                if (!channel.resolution || channel.resolution === '') {
-                    resolutionFiltered[ip] = channel;
-                }
-                return;
-            }
-
-            if (!channel.resolution) {
-                // Skip channels without resolution data when other filters are active
-                return;
-            }
-
-            const [widthStr, heightStr] = channel.resolution.split('x');
-            const width = parseInt(widthStr);
-            const height = parseInt(heightStr);
-
-            // Treat 720x576 (and similar PAL resolutions) as 720p
-            const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
-
-            if (currentChannelResolutionFilter === '4k' && width >= 3840) {
-                resolutionFiltered[ip] = channel;
-            } else if (currentChannelResolutionFilter === '1080' && width >= 1920 && width < 3840) {
-                resolutionFiltered[ip] = channel;
-            } else if (currentChannelResolutionFilter === '720' && is720p) {
-                resolutionFiltered[ip] = channel;
-            }
-        });
-        filteredChannels = resolutionFiltered;
-    }
-
-    // Apply connectivity filter
-    if (currentConnectivityFilter !== 'all') {
-        const connectivityFiltered = {};
-        Object.entries(filteredChannels).forEach(([ip, channel]) => {
-            const connectivity = channel.connectivity || 'untested';
-
-            if (currentConnectivityFilter === connectivity) {
-                connectivityFiltered[ip] = channel;
-            }
-        });
-        filteredChannels = connectivityFiltered;
-    }
-
-    displayChannels(filteredChannels);
+    // Reload channels from server
+    loadChannels();
 }
 
 function displayChannels(channels) {
@@ -1211,94 +1143,24 @@ function displayChannels(channels) {
 
     channelsTbody.innerHTML = '';
 
-    // Use cached groups data for sorting
-    const groupsData = allGroupsCache || {};
+    // Channels are already sorted by the backend, so just display them in order
+    // Backend sorting rules:
+    // 1. Group sort_order (grouped channels first, sorted by group order)
+    // 2. Resolution (higher resolution first within same group)
+    // 3. Channel name (natural sorting for names with numbers like CCTV1, CCTV2, CCTV11)
+    // 4. Test status (failed tests go to the bottom)
 
-    // Sort channels by:
-    // 1. Test status (successful tests first, failed tests last)
-    // 2. Group sort_order (channels with groups come first)
-    // 3. Channel name within the same group
-    // 4. IP for channels without names
-    const sortedChannels = Object.entries(channels).sort((a, b) => {
-        const [ipA, channelA] = a;
-        const [ipB, channelB] = b;
-
-        // First, sort by test status - successful tests come first
-        const testStatusA = channelA.test_status || 'success'; // Default to success for old data
-        const testStatusB = channelB.test_status || 'success';
-
-        // Successful = 0, Failed = 1, so failed channels will be sorted to bottom
-        const statusOrderA = testStatusA === 'success' ? 0 : 1;
-        const statusOrderB = testStatusB === 'success' ? 0 : 1;
-
-        if (statusOrderA !== statusOrderB) {
-            return statusOrderA - statusOrderB;
-        }
-
-        // Get the minimum sort_order for each channel's groups
-        const getMinSortOrder = (channel) => {
-            if (!channel.groups || channel.groups.length === 0) {
-                return 9999; // Ungrouped channels go to the end
-            }
-
-            let minOrder = 9999;
-            channel.groups.forEach(group => {
-                const groupInfo = groupsData[group.id];
-                if (groupInfo && groupInfo.sort_order < minOrder) {
-                    minOrder = groupInfo.sort_order;
-                }
-            });
-            return minOrder;
-        };
-
-        const orderA = getMinSortOrder(channelA);
-        const orderB = getMinSortOrder(channelB);
-
-        // Then sort by group order
-        if (orderA !== orderB) {
-            return orderA - orderB;
-        }
-
-        // Within same group, sort by resolution (descending - highest first)
-        const getResolutionWidth = (channel) => {
-            if (!channel.resolution) return 0; // No resolution = lowest priority
-            const [widthStr] = channel.resolution.split('x');
-            return parseInt(widthStr) || 0;
-        };
-
-        const widthA = getResolutionWidth(channelA);
-        const widthB = getResolutionWidth(channelB);
-
-        if (widthA !== widthB) {
-            return widthB - widthA; // Descending order (larger resolution first)
-        }
-
-        // Then sort by channel name (using Chinese locale for proper sorting)
-        const nameA = channelA.name || '';
-        const nameB = channelB.name || '';
-
-        // If both have names, compare them
-        if (nameA || nameB) {
-            // Use localeCompare with Chinese locale for proper Chinese character sorting
-            // This will also handle empty strings correctly
-            return nameA.localeCompare(nameB, 'zh-CN', { numeric: true });
-        }
-
-        // Finally sort by IP for channels without names
-        const ipPartsA = ipA.split('.').map(Number);
-        const ipPartsB = ipB.split('.').map(Number);
-        for (let i = 0; i < 4; i++) {
-            if (ipPartsA[i] !== ipPartsB[i]) return ipPartsA[i] - ipPartsB[i];
-        }
-        return 0;
-    });
-
-    // Update count display - always show online count, not filtered count
-    // Count online channels from all channels
-    const onlineCount = Object.values(allChannels).filter(ch => ch.connectivity === 'online').length;
+    // Update count display - show online count from backend stats
+    const onlineCount = channelStats ? channelStats.connectivity.online : 0;
     channelsCount.textContent = `共 ${onlineCount} 个频道`;
 
-    sortedChannels.forEach(([ip, channel]) => {
+    // Handle both array and object formats for backward compatibility
+    const channelsList = Array.isArray(channels)
+        ? channels
+        : Object.entries(channels).map(([ip, channel]) => ({ip, ...channel}));
+
+    channelsList.forEach(channel => {
+        const ip = channel.ip;
         const row = createChannelRow(ip, channel);
         channelsTbody.appendChild(row);
     });
@@ -1582,8 +1444,18 @@ async function saveChannelField(ip, field, value) {
             data.name = value;
         } else if (field === 'playback') {
             data.playback = value;
+            // Auto-update catchup field based on playback
+            if (value && value.trim() !== '') {
+                // If playback has value, set catchup to 'default'
+                data.catchup = 'default';
+            } else {
+                // If playback is empty, clear catchup
+                data.catchup = '';
+            }
         } else if (field === 'logo') {
             data.logo = value;
+        } else if (field === 'tvg_id') {
+            data.tvg_id = value;
         }
 
         const response = await fetch('/api/channels/update', {
@@ -1597,6 +1469,52 @@ async function saveChannelField(ip, field, value) {
         const result = await response.json();
         if (result.status !== 'success') {
             console.error('Failed to save channel field:', result.message);
+        } else {
+            // Update local cache to reflect changes immediately
+            if (Array.isArray(allChannels)) {
+                const channel = allChannels.find(ch => ch.ip === ip);
+                if (channel) {
+                    if (field === 'name') channel.name = value;
+                    else if (field === 'playback') {
+                        channel.playback = value;
+                        channel.catchup = value && value.trim() !== '' ? 'default' : '';
+                    }
+                    else if (field === 'logo') channel.logo = value;
+                    else if (field === 'tvg_id') channel.tvg_id = value;
+                }
+            } else if (allChannels[ip]) {
+                if (field === 'name') allChannels[ip].name = value;
+                else if (field === 'playback') {
+                    allChannels[ip].playback = value;
+                    allChannels[ip].catchup = value && value.trim() !== '' ? 'default' : '';
+                }
+                else if (field === 'logo') allChannels[ip].logo = value;
+                else if (field === 'tvg_id') allChannels[ip].tvg_id = value;
+            }
+
+            // Also update allChannelsCache if it exists
+            if (allChannelsCache) {
+                if (Array.isArray(allChannelsCache)) {
+                    const cached = allChannelsCache.find(ch => ch.ip === ip);
+                    if (cached) {
+                        if (field === 'name') cached.name = value;
+                        else if (field === 'playback') {
+                            cached.playback = value;
+                            cached.catchup = value && value.trim() !== '' ? 'default' : '';
+                        }
+                        else if (field === 'logo') cached.logo = value;
+                        else if (field === 'tvg_id') cached.tvg_id = value;
+                    }
+                } else if (allChannelsCache[ip]) {
+                    if (field === 'name') allChannelsCache[ip].name = value;
+                    else if (field === 'playback') {
+                        allChannelsCache[ip].playback = value;
+                        allChannelsCache[ip].catchup = value && value.trim() !== '' ? 'default' : '';
+                    }
+                    else if (field === 'logo') allChannelsCache[ip].logo = value;
+                    else if (field === 'tvg_id') allChannelsCache[ip].tvg_id = value;
+                }
+            }
         }
     } catch (error) {
         console.error('Failed to save channel field:', error);
@@ -2035,8 +1953,8 @@ async function startImportM3u() {
 
             // Reload channels and groups
             setTimeout(async () => {
-                await loadGroups();
-                await loadChannels();
+                await loadGroups();  // Load groups (also updates allGroupsCache)
+                await loadChannels();  // Use cached groups, no duplicate request
                 closeImportM3uModal();
 
                 // Clear highlighting after 10 seconds
@@ -2110,55 +2028,164 @@ async function testSingleChannelConnectivity(ip) {
     }
 }
 
-// Test all channels connectivity
+// Test all channels connectivity - one by one (serial processing)
 async function testAllChannelsConnectivity() {
     const btn = document.getElementById('test-all-connectivity-btn');
     const originalContent = btn.innerHTML;
 
     try {
         btn.disabled = true;
-        btn.innerHTML = '<span>⏳</span> <span data-i18n="testing">测试中...</span>';
+        const testingText = i18n.get('testing') || 'Testing';
+        btn.innerHTML = `<span>⏳</span> <span>${testingText}...</span>`;
 
-        // Get all channel IPs from the current filtered view
-        const allChannelIps = Object.keys(tv_channels);
+        // Get all channel IPs from the current filtered view (allChannels contains filtered results)
+        const allChannelIps = Array.isArray(allChannels)
+            ? allChannels.map(ch => ch.ip)
+            : Object.keys(allChannels);
 
         if (allChannelIps.length === 0) {
             alert('没有频道可测试');
             return;
         }
 
-        // Set all channels to testing status first
-        allChannelIps.forEach(ip => {
+        // Test channels one by one (serial processing)
+        for (let i = 0; i < allChannelIps.length; i++) {
+            const ip = allChannelIps[i];
+
+            // Update UI to show testing status for current channel
             const row = document.querySelector(`tr[data-ip="${ip}"]`);
             if (row) {
                 const connectivityBadge = row.querySelector('.connectivity-badge');
                 if (connectivityBadge) {
                     connectivityBadge.className = 'connectivity-badge connectivity-testing';
-                    connectivityBadge.innerHTML = `🟡 <span>${i18n.get('testing') || '测试中'}</span>`;
+                    connectivityBadge.innerHTML = `🟡 <span>${testingText}</span>`;
                 }
             }
-        });
 
-        // Test in batches to avoid overwhelming the server
-        const batchSize = 10;
-        for (let i = 0; i < allChannelIps.length; i += batchSize) {
-            const batch = allChannelIps.slice(i, i + batchSize);
+            // Update button progress
+            const progress = Math.round(((i + 1) / allChannelIps.length) * 100);
+            btn.innerHTML = `<span>⏳</span> <span>${testingText} ${i + 1}/${allChannelIps.length} (${progress}%)</span>`;
 
-            const response = await fetch('/api/channels/test-connectivity', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ips: batch })
-            });
+            try {
+                // Test single channel
+                const response = await fetch('/api/channels/test-connectivity', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ips: [ip] })
+                });
 
-            const data = await response.json();
+                const data = await response.json();
 
-            // Update progress
-            const progress = Math.min(100, Math.round((i + batch.length) / allChannelIps.length * 100));
-            btn.innerHTML = `<span>⏳</span> <span>${i18n.get('testing') || '测试中'} ${progress}%</span>`;
+                // Update the row immediately with all result data (connectivity, screenshot, resolution, etc.)
+                if (data.status === 'success' && data.results.length > 0) {
+                    const result = data.results[0];
+                    if (row) {
+                        // Update connectivity badge
+                        const connectivityBadge = row.querySelector('.connectivity-badge');
+                        if (connectivityBadge) {
+                            const connectivity = result.connectivity;
+                            let statusIcon = '';
+                            let statusText = '';
 
-            // Reload channels to update display after each batch
-            await loadChannels();
+                            if (connectivity === 'online') {
+                                statusIcon = '🟢';
+                                statusText = i18n.get('online') || 'Online';
+                                connectivityBadge.className = 'connectivity-badge connectivity-online clickable';
+                            } else if (connectivity === 'offline') {
+                                statusIcon = '🟠';
+                                statusText = i18n.get('offline') || 'Offline';
+                                connectivityBadge.className = 'connectivity-badge connectivity-offline clickable';
+                            } else if (connectivity === 'failed') {
+                                statusIcon = '🔴';
+                                statusText = i18n.get('failed') || 'Failed';
+                                connectivityBadge.className = 'connectivity-badge connectivity-failed clickable';
+                            } else {
+                                statusIcon = '⚪';
+                                statusText = i18n.get('untested') || 'Untested';
+                                connectivityBadge.className = 'connectivity-badge connectivity-untested clickable';
+                            }
+
+                            connectivityBadge.innerHTML = `${statusIcon} <span>${statusText}</span>`;
+                        }
+
+                        // Update screenshot if changed
+                        if (result.screenshot) {
+                            const screenshotImg = row.querySelector('.channel-screenshot-cell img');
+                            if (screenshotImg) {
+                                screenshotImg.src = result.screenshot;
+                            } else {
+                                // No screenshot before, add one
+                                const screenshotDiv = row.querySelector('.channel-screenshot-cell');
+                                if (screenshotDiv && screenshotDiv.classList.contains('no-screenshot')) {
+                                    screenshotDiv.classList.remove('no-screenshot');
+                                    screenshotDiv.innerHTML = '';
+                                    screenshotDiv.onclick = () => enlargeImage(result.screenshot);
+                                    const img = document.createElement('img');
+                                    img.src = result.screenshot;
+                                    img.alt = result.name || 'Channel Screenshot';
+                                    screenshotDiv.appendChild(img);
+                                }
+                            }
+                        }
+
+                        // Update resolution if changed
+                        if (result.resolution) {
+                            const resolutionBadge = row.querySelector('.resolution-badge');
+                            if (resolutionBadge) {
+                                const [widthStr, heightStr] = result.resolution.split('x');
+                                const width = parseInt(widthStr);
+                                const height = parseInt(heightStr);
+                                const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
+
+                                let badgeClass = 'resolution-badge';
+                                let badgeTitle = '';
+                                if (width >= 3840) {
+                                    badgeClass += ' resolution-4k';
+                                    badgeTitle = '4K Ultra HD';
+                                } else if (width >= 1920) {
+                                    badgeClass += ' resolution-1080p';
+                                    badgeTitle = 'Full HD';
+                                } else if (is720p) {
+                                    badgeClass += ' resolution-720p';
+                                    badgeTitle = 'HD Ready';
+                                }
+
+                                resolutionBadge.className = badgeClass;
+                                resolutionBadge.title = badgeTitle;
+                                resolutionBadge.textContent = result.resolution;
+                            }
+                        }
+
+                        // Update local cache
+                        if (Array.isArray(allChannels)) {
+                            const channel = allChannels.find(ch => ch.ip === ip);
+                            if (channel) {
+                                Object.assign(channel, result);
+                            }
+                        } else if (allChannels[ip]) {
+                            Object.assign(allChannels[ip], result);
+                        }
+
+                        if (allChannelsCache) {
+                            if (Array.isArray(allChannelsCache)) {
+                                const cached = allChannelsCache.find(ch => ch.ip === ip);
+                                if (cached) {
+                                    Object.assign(cached, result);
+                                }
+                            } else if (allChannelsCache[ip]) {
+                                Object.assign(allChannelsCache[ip], result);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error(`Failed to test ${ip}:`, error);
+                // Continue with next channel even if this one fails
+            }
         }
+
+        // Final reload to ensure all data is synchronized
+        await loadChannels();
 
         alert(`测试完成！共测试 ${allChannelIps.length} 个频道`);
 
@@ -2182,6 +2209,7 @@ async function loadGroups() {
 
         if (data.status === 'success') {
             allGroups = data.groups;
+            allGroupsCache = data.groups;  // Also update cache to avoid duplicate requests
             displayGroupsList();
 
             // Auto-select first group if no group is currently selected
@@ -2333,16 +2361,10 @@ async function updateGroupsOrder() {
 
         const data = await response.json();
         if (data.status === 'success') {
-            // Reload groups to sync
+            // Reload groups to sync (also updates allGroupsCache)
             await loadGroups();
-            // Update cached groups data and refresh channels display
-            const groupsResponse = await fetch('/api/groups');
-            const groupsData = await groupsResponse.json();
-            if (groupsData.status === 'success') {
-                allGroupsCache = groupsData.groups;
-                // Refresh channels display with new sorting
-                applyChannelFilters();
-            }
+            // Refresh channels display with new sorting (uses cached groups)
+            loadChannels();
         }
     } catch (error) {
         console.error('Failed to update groups order:', error);
@@ -2378,16 +2400,27 @@ async function displayGroupChannels() {
         return;
     }
 
-    // Get full channel info
+    // Get full channel info (use cache to avoid duplicate API calls)
     try {
-        const response = await fetch('/api/channels');
-        const data = await response.json();
+        // Load all channels if not cached
+        if (!allChannelsCache) {
+            const response = await fetch('/api/channels');
+            const data = await response.json();
+            if (data.status === 'success') {
+                allChannelsCache = data.channels;
+            }
+        }
 
-        if (data.status === 'success') {
+        if (allChannelsCache) {
             channelsList.innerHTML = '';
 
+            // Convert channels array to object for quick lookup
+            const channelsMap = Array.isArray(allChannelsCache)
+                ? Object.fromEntries(allChannelsCache.map(ch => [ch.ip, ch]))
+                : allChannelsCache;
+
             group.channels.forEach(ip => {
-                const channel = data.channels[ip];
+                const channel = channelsMap[ip];
                 if (!channel) return;
 
                 const item = document.createElement('div');
@@ -2519,19 +2552,30 @@ async function showAddChannelsModal() {
     const modal = document.getElementById('add-channels-modal');
     modal.style.display = 'flex';
 
-    // Load available channels
+    // Load available channels (use cache to avoid duplicate API calls)
     try {
-        const response = await fetch('/api/channels');
-        const data = await response.json();
+        // Load all channels if not cached
+        if (!allChannelsCache) {
+            const response = await fetch('/api/channels');
+            const data = await response.json();
+            if (data.status === 'success') {
+                allChannelsCache = data.channels;
+            }
+        }
 
-        if (data.status === 'success') {
+        if (allChannelsCache) {
             const group = allGroups[currentGroupId];
             const existingChannels = new Set(group.channels || []);
 
             const availableList = document.getElementById('available-channels-list');
             availableList.innerHTML = '';
 
-            Object.entries(data.channels).forEach(([ip, channel]) => {
+            // Convert to entries for iteration
+            const channelsEntries = Array.isArray(allChannelsCache)
+                ? allChannelsCache.map(ch => [ch.ip, ch])
+                : Object.entries(allChannelsCache);
+
+            channelsEntries.forEach(([ip, channel]) => {
                 if (existingChannels.has(ip)) return; // Skip already added channels
 
                 const item = document.createElement('div');
