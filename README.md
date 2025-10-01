@@ -2,7 +2,9 @@
 
 IPTV流嗅探工具，用于批量测试IPTV流地址的可用性，支持自动截图、频道管理和AI识别。
 
-<img src="iptv_sniff.png" alt="IPTV Stream Sniffer" width="600">
+<div align="center">
+    <img src="iptv_sniff.png" alt="IPTV Stream Sniffer" width="100">
+</div>
 
 ## 功能特性
 
