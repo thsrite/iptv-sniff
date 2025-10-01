@@ -14,13 +14,6 @@ else
     echo "WARNING: FFmpeg not found!"
 fi
 
-# Check hardware acceleration support
-if command -v vainfo &> /dev/null; then
-    echo ""
-    echo "VA-API Information:"
-    vainfo || echo "VA-API not available or no device found"
-fi
-
 echo ""
 echo "==================================="
 
