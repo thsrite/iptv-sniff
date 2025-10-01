@@ -37,7 +37,7 @@ docker run -d \
   -p 9832:9832 \
   -v $(pwd)/screenshots:/app/screenshots \
   -v $(pwd)/config:/app/config \
-  ghcr.io/thsrite/iptv_sniff:latest
+  thsrite/iptv_sniff:latest
 ```
 
 访问 `http://localhost:9832` 即可使用。
@@ -71,9 +71,9 @@ python main.py
 
 在"Stream Test"标签页中：
 1. 输入基础URL，使用 `{ip}` 作为IP地址的占位符
-   - 例如：`http://192.168.3.2:7788/rtp/{ip}:8000`
+   - 例如：`http://192.168.2.2:7788/rtp/{ip}:8000`
 2. 输入起始IP和结束IP
-   - 例如：`239.253.248.1` 到 `239.253.248.256`
+   - 例如：`111.111.111.1` 到 `111.111.111.255`
 3. 点击"Start Test"开始测试
 
 测试结果会显示：
@@ -138,8 +138,8 @@ Content-Type: application/json
 
 {
   "base_url": "http://192.168.3.2:7788/rtp/{ip}:8000",
-  "start_ip": "239.253.248.1",
-  "end_ip": "239.253.248.256"
+  "start_ip": "111.111.111.1",
+  "end_ip": "111.111.111.256"
 }
 
 # 获取测试状态
@@ -159,7 +159,7 @@ POST /api/channels/update
 Content-Type: application/json
 
 {
-  "ip": "239.253.248.1",
+  "ip": "111.111.111.1",
   "name": "CCTV-1",
   "logo": "http://example.com/logo.png",
   "tvg_id": "CCTV1"
