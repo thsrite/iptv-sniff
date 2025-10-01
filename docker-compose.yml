@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  iptv-sniffer:
+    image: thsrite/iptv_sniff:latest
+    container_name: iptv-sniffer
+    restart: unless-stopped
+    ports:
+      - "9832:9832"
+    volumes:
+      - ./screenshots:/app/screenshots
+      - ./config:/app/config
+    devices:
+      # Uncomment the following line to enable Intel Quick Sync hardware acceleration
+      # - /dev/dri:/dev/dri
+    environment:
+      - PORT=9832
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9832"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
