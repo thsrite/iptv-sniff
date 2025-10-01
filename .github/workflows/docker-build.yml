@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: thsrite/iptv_sniff
+  IMAGE_NAME: thsrite/iptv-sniff
 
 jobs:
   build:

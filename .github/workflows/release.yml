@@ -38,18 +38,18 @@ jobs:
 
         ## Docker Images
 
-        - \`docker pull thsrite/iptv_sniff:${GITHUB_REF#refs/tags/}\`
-        - \`docker pull thsrite/iptv_sniff:latest\`
+        - \`docker pull thsrite/iptv-sniff:${GITHUB_REF#refs/tags/}\`
+        - \`docker pull thsrite/iptv-sniff:latest\`
 
         ## Quick Start
 
         \`\`\`bash
         # Using docker-compose
-        curl -O https://raw.githubusercontent.com/thsrite/iptv_sniff/${GITHUB_REF#refs/tags/}/docker-compose.yml
+        curl -O https://raw.githubusercontent.com/thsrite/iptv-sniff/${GITHUB_REF#refs/tags/}/docker-compose.yml
         docker-compose up -d
 
         # Or using docker directly
-        docker run -p 9832:9832 -v ./downloads:/app/downloads -v ./config:/app/config thsrite/iptv_sniff:${GITHUB_REF#refs/tags/}
+        docker run -p 9833:9833 -v ./screenshots:/app/screenshots -v ./config:/app/config thsrite/iptv-sniff:${GITHUB_REF#refs/tags/}
         \`\`\`
         EOF
 

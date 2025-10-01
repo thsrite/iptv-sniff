@@ -34,13 +34,13 @@ IPTV流嗅探工具，用于批量测试IPTV流地址的可用性，支持自动
 docker run -d \
   --name iptv-sniffer \
   --device /dev/dri:/dev/dri \
-  -p 9832:9832 \
+  -p 9833:9833 \
   -v $(pwd)/screenshots:/app/screenshots \
   -v $(pwd)/config:/app/config \
-  thsrite/iptv_sniff:latest
+  thsrite/iptv-sniff:latest
 ```
 
-访问 `http://localhost:9832` 即可使用。
+访问 `http://localhost:9833` 即可使用。
 
 ### 本地开发
 
@@ -211,7 +211,7 @@ POST /api/config
 ## 项目结构
 
 ```
-iptv_sniff/
+iptv-sniff/
 ├── main.py                 # Flask后端主程序
 ├── index.html              # 前端页面
 ├── static/
@@ -235,7 +235,7 @@ iptv_sniff/
 
 ## 环境变量
 
-- `PORT`: 服务端口（默认：9832）
+- `PORT`: 服务端口（默认：9833）
 - `PYTHONUNBUFFERED`: 禁用Python输出缓冲（默认：1）
 
 ## 注意事项
