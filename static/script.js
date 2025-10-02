@@ -123,6 +123,15 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     const aiApiKey = document.getElementById('ai-api-key').value;
     const aiModel = document.getElementById('ai-model').value;
 
+    // Get metadata source URL
+    const metadataSourceUrl = document.getElementById('metadata-source-url').value;
+
+    // Get EPG URL
+    const epgUrl = document.getElementById('epg-url').value;
+
+    // Get external base URL
+    const externalBaseUrl = document.getElementById('external-base-url').value;
+
     try {
         const response = await fetch('/api/config', {
             method: 'POST',
@@ -133,6 +142,9 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
                 timeout: timeout,
                 queue_size: queueSize,
                 custom_params: customParams,
+                metadata_source_url: metadataSourceUrl,
+                epg_url: epgUrl,
+                external_base_url: externalBaseUrl,
                 database: database,
                 ai_model: {
                     enabled: aiEnabled,
@@ -249,9 +261,30 @@ async function loadConfig() {
 
         document.getElementById('custom-params').value = config.custom_params || '';
 
+        // Load metadata source URL
+        document.getElementById('metadata-source-url').value = config.metadata_source_url || '';
+
+        // Load EPG URL
+        document.getElementById('epg-url').value = config.epg_url || '';
+
+        // Load external base URL
+        document.getElementById('external-base-url').value = config.external_base_url || '';
+
+        // Show/hide NET link based on external_base_url configuration
+        const netLinkContainer = document.getElementById('net-link-container');
+        const netUrlLink = document.getElementById('net-url-link');
+        if (config.external_base_url) {
+            const netUrl = `${window.location.origin}/net`;
+            netUrlLink.href = netUrl;
+            netUrlLink.textContent = netUrl;
+            netLinkContainer.style.display = 'flex';
+        } else {
+            netLinkContainer.style.display = 'none';
+        }
+
         // Load database configuration
         if (config.database) {
-            document.getElementById('db-type').value = config.database.type || 'json';
+            document.getElementById('db-type').value = config.database.type || 'sqlite';
 
             if (config.database.type === 'postgresql' && config.database.postgresql) {
                 document.getElementById('pg-host').value = config.database.postgresql.host || 'localhost';
@@ -892,7 +925,6 @@ let currentConnectivityFilter = 'all';  // Default to 'all' (show all channels)
 let currentIPFilter = '';
 let isLoadingChannels = false;  // Flag to prevent duplicate API calls
 let isLoadingGroups = false;  // Flag to prevent duplicate groups API calls
-
 // Helper function to clear groups cache when groups data changes
 function clearGroupsCache() {
     allGroupsCache = {};
@@ -1152,7 +1184,7 @@ function displayChannels(channels) {
 
     // Update count display - show online count from backend stats
     const onlineCount = channelStats ? channelStats.connectivity.online : 0;
-    channelsCount.textContent = `共 ${onlineCount} 个频道`;
+    channelsCount.textContent = `可用 ${onlineCount}`;
 
     // Handle both array and object formats for backward compatibility
     const channelsList = Array.isArray(channels)
@@ -1881,6 +1913,71 @@ document.getElementById('import-m3u-btn').addEventListener('click', () => {
     openImportM3uModal();
 });
 
+// Sync metadata from online M3U URL
+document.getElementById('sync-metadata-btn').addEventListener('click', () => {
+    syncMetadata();
+});
+
+async function syncMetadata() {
+    // Confirm action
+    const confirmMsg = i18n.get('confirmSyncMetadata') || '确认从配置的URL同步元数据（logo、catchup等）？\n这将根据频道名匹配并更新现有频道的元数据。';
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    const btn = document.getElementById('sync-metadata-btn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> <span>' + (i18n.get('syncing') || '同步中...') + '</span>';
+
+    try {
+        const response = await fetch('/api/metadata/sync', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            // Build success message with URL statistics
+            let successMsg = `元数据同步成功！\n\n`;
+
+            // Show URL processing stats
+            if (data.url_stats && data.url_stats.length > 0) {
+                successMsg += `处理的URL数量: ${data.urls_processed}\n\n`;
+                data.url_stats.forEach((stat, index) => {
+                    successMsg += `URL ${index + 1} (${stat.format}): ${stat.parsed} 条记录\n`;
+                    if (stat.error) {
+                        successMsg += `  错误: ${stat.error}\n`;
+                    }
+                });
+                successMsg += '\n';
+            }
+
+            // Show matching stats
+            successMsg += `元数据总条目数: ${data.total_metadata}\n` +
+                `匹配的频道数: ${data.matched}\n` +
+                `更新的频道数: ${data.updated}\n` +
+                `未匹配的频道数: ${data.unmatched}`;
+
+            alert(successMsg);
+
+            // Reload channels to show updated data
+            await loadChannels();
+        } else {
+            alert('同步失败: ' + (data.message || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Failed to sync metadata:', error);
+        alert('同步失败: ' + error.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+}
+
 function openImportM3uModal() {
     const modal = document.getElementById('import-m3u-modal');
     modal.style.display = 'flex';
@@ -1997,7 +2094,7 @@ let selectedChannelsForGroup = [];
 // Track newly imported channels for highlighting
 let newlyImportedChannels = new Set();
 
-// Test connectivity
+// Test connectivity for a single channel - synchronous execution
 async function testSingleChannelConnectivity(ip) {
     try {
         // Update UI to show testing status
@@ -2010,17 +2107,118 @@ async function testSingleChannelConnectivity(ip) {
             }
         }
 
-        const response = await fetch('/api/channels/test-connectivity', {
+        // Call synchronous API for single channel test
+        const response = await fetch('/api/channels/test-connectivity-sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ips: [ip] })
+            body: JSON.stringify({ ip: ip })
         });
 
         const data = await response.json();
 
-        if (data.status === 'success' && data.results.length > 0) {
-            // Reload channels to update display
-            await loadChannels();
+        if (data.status === 'success' && data.result) {
+            const result = data.result;
+
+            // Update UI immediately with result
+            if (row) {
+                // Update connectivity badge
+                const connectivityBadge = row.querySelector('.connectivity-badge');
+                if (connectivityBadge) {
+                    const connectivity = result.connectivity;
+                    let statusIcon = '';
+                    let statusText = '';
+
+                    if (connectivity === 'online') {
+                        statusIcon = '🟢';
+                        statusText = i18n.get('online') || 'Online';
+                        connectivityBadge.className = 'connectivity-badge connectivity-online clickable';
+                    } else if (connectivity === 'offline') {
+                        statusIcon = '🟠';
+                        statusText = i18n.get('offline') || 'Offline';
+                        connectivityBadge.className = 'connectivity-badge connectivity-offline clickable';
+                    } else if (connectivity === 'failed') {
+                        statusIcon = '🔴';
+                        statusText = i18n.get('failed') || 'Failed';
+                        connectivityBadge.className = 'connectivity-badge connectivity-failed clickable';
+                    } else {
+                        statusIcon = '⚪';
+                        statusText = i18n.get('untested') || 'Untested';
+                        connectivityBadge.className = 'connectivity-badge connectivity-untested clickable';
+                    }
+
+                    connectivityBadge.innerHTML = `${statusIcon} <span>${statusText}</span>`;
+                }
+
+                // Update screenshot if available
+                if (result.screenshot) {
+                    const screenshotDiv = row.querySelector('.channel-screenshot-cell');
+                    if (screenshotDiv) {
+                        screenshotDiv.innerHTML = '';
+                        screenshotDiv.className = 'channel-screenshot-cell';
+                        screenshotDiv.onclick = () => enlargeImage(result.screenshot);
+
+                        const img = document.createElement('img');
+                        img.src = result.screenshot;
+                        img.alt = result.name || 'Channel Screenshot';
+                        screenshotDiv.appendChild(img);
+                    }
+                }
+
+                // Update resolution if available
+                if (result.resolution) {
+                    const resolutionBadge = row.querySelector('.resolution-badge');
+                    if (resolutionBadge) {
+                        const [widthStr, heightStr] = result.resolution.split('x');
+                        const width = parseInt(widthStr);
+                        const height = parseInt(heightStr);
+                        const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
+
+                        let badgeClass = 'resolution-badge';
+                        let badgeTitle = '';
+                        if (width >= 3840) {
+                            badgeClass += ' resolution-4k';
+                            badgeTitle = '4K Ultra HD';
+                        } else if (width >= 1920) {
+                            badgeClass += ' resolution-1080p';
+                            badgeTitle = 'Full HD';
+                        } else if (is720p) {
+                            badgeClass += ' resolution-720p';
+                            badgeTitle = 'HD Ready';
+                        }
+
+                        resolutionBadge.className = badgeClass;
+                        resolutionBadge.title = badgeTitle;
+                        resolutionBadge.textContent = result.resolution;
+                    }
+                }
+
+                // Update timestamp (update time)
+                const timeTd = row.querySelector('.channel-time');
+                if (timeTd) {
+                    // Backend returns timestamp in result or use current time
+                    const timestamp = result.timestamp || new Date().toISOString();
+                    timeTd.textContent = new Date(timestamp).toLocaleString('zh-CN');
+                }
+
+                // Update local cache
+                if (Array.isArray(allChannels)) {
+                    const channel = allChannels.find(ch => ch.ip === ip);
+                    if (channel) Object.assign(channel, result);
+                } else if (allChannels[ip]) {
+                    Object.assign(allChannels[ip], result);
+                }
+
+                if (allChannelsCache) {
+                    if (Array.isArray(allChannelsCache)) {
+                        const cached = allChannelsCache.find(ch => ch.ip === ip);
+                        if (cached) Object.assign(cached, result);
+                    } else if (allChannelsCache[ip]) {
+                        Object.assign(allChannelsCache[ip], result);
+                    }
+                }
+            }
+        } else {
+            throw new Error(data.message || 'Test failed');
         }
     } catch (error) {
         console.error('Failed to test connectivity:', error);
@@ -2028,7 +2226,7 @@ async function testSingleChannelConnectivity(ip) {
     }
 }
 
-// Test all channels connectivity - one by one (serial processing)
+// Test all channels connectivity - background task mode
 async function testAllChannelsConnectivity() {
     const btn = document.getElementById('test-all-connectivity-btn');
     const originalContent = btn.innerHTML;
@@ -2038,7 +2236,7 @@ async function testAllChannelsConnectivity() {
         const testingText = i18n.get('testing') || 'Testing';
         btn.innerHTML = `<span>⏳</span> <span>${testingText}...</span>`;
 
-        // Get all channel IPs from the current filtered view (allChannels contains filtered results)
+        // Get all channel IPs from the current filtered view
         const allChannelIps = Array.isArray(allChannels)
             ? allChannels.map(ch => ch.ip)
             : Object.keys(allChannels);
@@ -2048,151 +2246,182 @@ async function testAllChannelsConnectivity() {
             return;
         }
 
-        // Test channels one by one (serial processing)
-        for (let i = 0; i < allChannelIps.length; i++) {
-            const ip = allChannelIps[i];
+        // Start background task
+        const response = await fetch('/api/channels/test-connectivity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ips: allChannelIps })
+        });
 
-            // Update UI to show testing status for current channel
-            const row = document.querySelector(`tr[data-ip="${ip}"]`);
-            if (row) {
-                const connectivityBadge = row.querySelector('.connectivity-badge');
-                if (connectivityBadge) {
-                    connectivityBadge.className = 'connectivity-badge connectivity-testing';
-                    connectivityBadge.innerHTML = `🟡 <span>${testingText}</span>`;
-                }
-            }
+        const data = await response.json();
 
-            // Update button progress
-            const progress = Math.round(((i + 1) / allChannelIps.length) * 100);
-            btn.innerHTML = `<span>⏳</span> <span>${testingText} ${i + 1}/${allChannelIps.length} (${progress}%)</span>`;
+        if (data.status !== 'success') {
+            throw new Error(data.message || 'Failed to start connectivity test');
+        }
 
+        const taskId = data.task_id;
+        const total = data.total;
+
+        // Track which IPs have been processed to avoid re-updating UI
+        const processedIps = new Set();
+
+        // Poll task status
+        let pollInterval = setInterval(async () => {
             try {
-                // Test single channel
-                const response = await fetch('/api/channels/test-connectivity', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ips: [ip] })
-                });
+                const statusResponse = await fetch(`/api/channels/test-connectivity/status/${taskId}`);
+                const statusData = await statusResponse.json();
 
-                const data = await response.json();
+                if (statusData.status === 'error') {
+                    clearInterval(pollInterval);
+                    throw new Error(statusData.message || 'Failed to get task status');
+                }
 
-                // Update the row immediately with all result data (connectivity, screenshot, resolution, etc.)
-                if (data.status === 'success' && data.results.length > 0) {
-                    const result = data.results[0];
-                    if (row) {
-                        // Update connectivity badge
-                        const connectivityBadge = row.querySelector('.connectivity-badge');
-                        if (connectivityBadge) {
-                            const connectivity = result.connectivity;
-                            let statusIcon = '';
-                            let statusText = '';
+                const task = statusData.task;
+                const completed = task.completed || 0;
+                const progress = Math.round((completed / total) * 100);
 
-                            if (connectivity === 'online') {
-                                statusIcon = '🟢';
-                                statusText = i18n.get('online') || 'Online';
-                                connectivityBadge.className = 'connectivity-badge connectivity-online clickable';
-                            } else if (connectivity === 'offline') {
-                                statusIcon = '🟠';
-                                statusText = i18n.get('offline') || 'Offline';
-                                connectivityBadge.className = 'connectivity-badge connectivity-offline clickable';
-                            } else if (connectivity === 'failed') {
-                                statusIcon = '🔴';
-                                statusText = i18n.get('failed') || 'Failed';
-                                connectivityBadge.className = 'connectivity-badge connectivity-failed clickable';
-                            } else {
-                                statusIcon = '⚪';
-                                statusText = i18n.get('untested') || 'Untested';
-                                connectivityBadge.className = 'connectivity-badge connectivity-untested clickable';
-                            }
+                // Update button progress
+                btn.innerHTML = `<span>⏳</span> <span>${testingText} ${completed}/${total} (${progress}%)</span>`;
 
-                            connectivityBadge.innerHTML = `${statusIcon} <span>${statusText}</span>`;
+                // Update UI for each result
+                const results = task.results || {};
+                for (const [ip, result] of Object.entries(results)) {
+                    // Skip if still testing or already processed
+                    if (result.status === 'testing' || processedIps.has(ip)) {
+                        continue;
+                    }
+
+                    // Mark as processed
+                    processedIps.add(ip);
+
+                    const row = document.querySelector(`tr[data-ip="${ip}"]`);
+                    if (!row) continue;
+
+                    // Update connectivity badge
+                    const connectivityBadge = row.querySelector('.connectivity-badge');
+                    if (connectivityBadge) {
+                        const connectivity = result.connectivity;
+                        let statusIcon = '';
+                        let statusText = '';
+
+                        if (connectivity === 'online') {
+                            statusIcon = '🟢';
+                            statusText = i18n.get('online') || 'Online';
+                            connectivityBadge.className = 'connectivity-badge connectivity-online clickable';
+                        } else if (connectivity === 'offline') {
+                            statusIcon = '🟠';
+                            statusText = i18n.get('offline') || 'Offline';
+                            connectivityBadge.className = 'connectivity-badge connectivity-offline clickable';
+                        } else if (connectivity === 'failed') {
+                            statusIcon = '🔴';
+                            statusText = i18n.get('failed') || 'Failed';
+                            connectivityBadge.className = 'connectivity-badge connectivity-failed clickable';
+                        } else {
+                            statusIcon = '⚪';
+                            statusText = i18n.get('untested') || 'Untested';
+                            connectivityBadge.className = 'connectivity-badge connectivity-untested clickable';
                         }
 
-                        // Update screenshot if changed
-                        if (result.screenshot) {
-                            const screenshotImg = row.querySelector('.channel-screenshot-cell img');
-                            if (screenshotImg) {
-                                screenshotImg.src = result.screenshot;
-                            } else {
-                                // No screenshot before, add one
-                                const screenshotDiv = row.querySelector('.channel-screenshot-cell');
-                                if (screenshotDiv && screenshotDiv.classList.contains('no-screenshot')) {
-                                    screenshotDiv.classList.remove('no-screenshot');
-                                    screenshotDiv.innerHTML = '';
-                                    screenshotDiv.onclick = () => enlargeImage(result.screenshot);
-                                    const img = document.createElement('img');
-                                    img.src = result.screenshot;
-                                    img.alt = result.name || 'Channel Screenshot';
-                                    screenshotDiv.appendChild(img);
-                                }
-                            }
+                        connectivityBadge.innerHTML = `${statusIcon} <span>${statusText}</span>`;
+                    }
+
+                    // Update screenshot if changed
+                    if (result.screenshot) {
+                        const screenshotDiv = row.querySelector('.channel-screenshot-cell');
+                        if (screenshotDiv) {
+                            screenshotDiv.innerHTML = '';
+                            screenshotDiv.className = 'channel-screenshot-cell';
+                            screenshotDiv.onclick = () => enlargeImage(result.screenshot);
+
+                            const img = document.createElement('img');
+                            img.src = result.screenshot;
+                            img.alt = result.name || 'Channel Screenshot';
+                            screenshotDiv.appendChild(img);
                         }
+                    }
 
-                        // Update resolution if changed
-                        if (result.resolution) {
-                            const resolutionBadge = row.querySelector('.resolution-badge');
-                            if (resolutionBadge) {
-                                const [widthStr, heightStr] = result.resolution.split('x');
-                                const width = parseInt(widthStr);
-                                const height = parseInt(heightStr);
-                                const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
+                    // Update resolution if changed
+                    if (result.resolution) {
+                        const resolutionBadge = row.querySelector('.resolution-badge');
+                        if (resolutionBadge) {
+                            const [widthStr, heightStr] = result.resolution.split('x');
+                            const width = parseInt(widthStr);
+                            const height = parseInt(heightStr);
+                            const is720p = (width === 720 && height === 576) || (width >= 1280 && width < 1920);
 
-                                let badgeClass = 'resolution-badge';
-                                let badgeTitle = '';
-                                if (width >= 3840) {
-                                    badgeClass += ' resolution-4k';
-                                    badgeTitle = '4K Ultra HD';
-                                } else if (width >= 1920) {
-                                    badgeClass += ' resolution-1080p';
-                                    badgeTitle = 'Full HD';
-                                } else if (is720p) {
-                                    badgeClass += ' resolution-720p';
-                                    badgeTitle = 'HD Ready';
-                                }
-
-                                resolutionBadge.className = badgeClass;
-                                resolutionBadge.title = badgeTitle;
-                                resolutionBadge.textContent = result.resolution;
+                            let badgeClass = 'resolution-badge';
+                            let badgeTitle = '';
+                            if (width >= 3840) {
+                                badgeClass += ' resolution-4k';
+                                badgeTitle = '4K Ultra HD';
+                            } else if (width >= 1920) {
+                                badgeClass += ' resolution-1080p';
+                                badgeTitle = 'Full HD';
+                            } else if (is720p) {
+                                badgeClass += ' resolution-720p';
+                                badgeTitle = 'HD Ready';
                             }
+
+                            resolutionBadge.className = badgeClass;
+                            resolutionBadge.title = badgeTitle;
+                            resolutionBadge.textContent = result.resolution;
                         }
+                    }
 
-                        // Update local cache
-                        if (Array.isArray(allChannels)) {
-                            const channel = allChannels.find(ch => ch.ip === ip);
-                            if (channel) {
-                                Object.assign(channel, result);
-                            }
-                        } else if (allChannels[ip]) {
-                            Object.assign(allChannels[ip], result);
-                        }
+                    // Update timestamp (update time)
+                    const timeTd = row.querySelector('.channel-time');
+                    if (timeTd) {
+                        // Backend returns timestamp in result or use current time
+                        const timestamp = result.timestamp || new Date().toISOString();
+                        timeTd.textContent = new Date(timestamp).toLocaleString('zh-CN');
+                    }
 
-                        if (allChannelsCache) {
-                            if (Array.isArray(allChannelsCache)) {
-                                const cached = allChannelsCache.find(ch => ch.ip === ip);
-                                if (cached) {
-                                    Object.assign(cached, result);
-                                }
-                            } else if (allChannelsCache[ip]) {
-                                Object.assign(allChannelsCache[ip], result);
-                            }
+                    // Update local cache
+                    if (Array.isArray(allChannels)) {
+                        const channel = allChannels.find(ch => ch.ip === ip);
+                        if (channel) Object.assign(channel, result);
+                    } else if (allChannels[ip]) {
+                        Object.assign(allChannels[ip], result);
+                    }
+
+                    if (allChannelsCache) {
+                        if (Array.isArray(allChannelsCache)) {
+                            const cached = allChannelsCache.find(ch => ch.ip === ip);
+                            if (cached) Object.assign(cached, result);
+                        } else if (allChannelsCache[ip]) {
+                            Object.assign(allChannelsCache[ip], result);
                         }
                     }
                 }
+
+                // Check if task is completed
+                if (task.status === 'completed' || task.status === 'failed') {
+                    clearInterval(pollInterval);
+
+                    // Final reload to ensure all data is synchronized
+                    await loadChannels();
+
+                    btn.disabled = false;
+                    btn.innerHTML = originalContent;
+
+                    if (task.status === 'completed') {
+                        alert(`测试完成！共测试 ${total} 个频道`);
+                    } else {
+                        alert(`测试失败: ${task.error || 'Unknown error'}`);
+                    }
+                }
             } catch (error) {
-                console.error(`Failed to test ${ip}:`, error);
-                // Continue with next channel even if this one fails
+                console.error('Error polling task status:', error);
+                clearInterval(pollInterval);
+                btn.disabled = false;
+                btn.innerHTML = originalContent;
+                alert('获取测试状态失败: ' + error.message);
             }
-        }
-
-        // Final reload to ensure all data is synchronized
-        await loadChannels();
-
-        alert(`测试完成！共测试 ${allChannelIps.length} 个频道`);
+        }, 1000); // Poll every 1 second
 
     } catch (error) {
         console.error('Failed to test connectivity:', error);
         alert('测试失败: ' + error.message);
-    } finally {
         btn.disabled = false;
         btn.innerHTML = originalContent;
     }
@@ -2852,6 +3081,27 @@ function switchLanguage(lang) {
 
 // Initialize language on page load
 document.addEventListener('DOMContentLoaded', () => {
+    // Set M3U URL in header
+    const m3uUrlLink = document.getElementById('m3u-url-link');
+    if (m3uUrlLink) {
+        const m3uUrl = `${window.location.origin}/m3u`;
+        m3uUrlLink.href = m3uUrl;
+        m3uUrlLink.textContent = m3uUrl;
+    }
+
+    // Set NET URL in header (only show if external_base_url is configured)
+    loadConfig().then(() => {
+        // This will be called after config is loaded
+    });
+
+    // Set EPG URL in header
+    const epgUrlLink = document.getElementById('epg-url-link');
+    if (epgUrlLink) {
+        const epgUrl = `${window.location.origin}/epg`;
+        epgUrlLink.href = epgUrl;
+        epgUrlLink.textContent = epgUrl;
+    }
+
     const currentLang = i18n.getLanguage();
     i18n.updatePageLanguage();
 

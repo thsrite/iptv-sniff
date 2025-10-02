@@ -9,8 +9,25 @@
 <body>
     <div class="container">
         <header>
-            <h1 data-i18n="title">IPTV Stream Sniffer</h1>
-            <p class="subtitle" data-i18n="subtitle">Test IPTV streams and capture screenshots</p>
+            <div style="flex: 1; min-width: 0;"></div>
+            <div style="text-align: center;">
+                <h1 data-i18n="title">IPTV Stream Sniffer</h1>
+                <p class="subtitle" data-i18n="subtitle">Test IPTV streams and capture screenshots</p>
+            </div>
+            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-start; align-items: flex-end; gap: 5px; padding-top: 10px; font-family: monospace;">
+                <div style="display: flex; align-items: center;">
+                    <span style="color: #ffffff; font-size: 14px; min-width: 50px; text-align: right; margin-right: 5px;">M3U:</span>
+                    <a id="m3u-url-link" href="" target="_blank" style="color: #ffffff; text-decoration: underline; font-size: 14px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;">Loading...</a>
+                </div>
+                <div id="net-link-container" style="display: none; align-items: center;">
+                    <span style="color: #ffffff; font-size: 14px; min-width: 50px; text-align: right; margin-right: 5px;">NET:</span>
+                    <a id="net-url-link" href="" target="_blank" style="color: #ffffff; text-decoration: underline; font-size: 14px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;">Loading...</a>
+                </div>
+                <div style="display: flex; align-items: center;">
+                    <span style="color: #ffffff; font-size: 14px; min-width: 50px; text-align: right; margin-right: 5px;">EPG:</span>
+                    <a id="epg-url-link" href="" target="_blank" style="color: #ffffff; text-decoration: underline; font-size: 14px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;">Loading...</a>
+                </div>
+            </div>
         </header>
 
         <div class="tabs">
@@ -97,6 +114,9 @@
                         </button>
                         <button id="import-m3u-btn" class="btn btn-primary btn-small">
                             <span>📥</span> <span data-i18n="importM3u">导入M3U</span>
+                        </button>
+                        <button id="sync-metadata-btn" class="btn btn-info btn-small">
+                            <span>🔄</span> <span data-i18n="syncMetadata">同步元数据</span>
                         </button>
                         <button id="export-channels-btn" class="btn btn-success btn-small" data-i18n="exportM3u">Export M3U</button>
                         <span id="channels-count" style="margin-left: 15px; color: #667eea; font-weight: 600;"></span>
@@ -274,7 +294,7 @@
                 <h2 data-i18n="advancedSettingsTitle">Advanced Settings</h2>
                 <form id="config-form">
                     <div class="form-group">
-                        <label for="language-select">语言 / Language:</label>
+                        <label for="language-select" data-i18n="language">语言</label>
                         <select id="language-select" class="language-select" onchange="switchLanguage(this.value)">
                             <option value="zh">🇨🇳 中文</option>
                             <option value="en">🇺🇸 English</option>
@@ -303,41 +323,66 @@
 
                     <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
 
-                    <h3 style="color: #667eea; margin-bottom: 20px;">数据库配置 / Database Configuration</h3>
+                    <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="urlConfig">URL配置</h3>
 
                     <div class="form-group">
-                        <label for="db-type">数据库类型 / Database Type:</label>
+                        <label for="external-base-url" data-i18n="externalBaseUrl">外网Base URL</label>
+                        <input type="text" id="external-base-url" placeholder="https://www.domain.com/rtp/{ip}:7777">
+                        <small data-i18n="externalBaseUrlHint">导出M3U时使用外网URL替换内网URL（可选）</small>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="metadataSourceConfig">元数据源配置</h3>
+
+                    <div class="form-group">
+                        <label for="metadata-source-url" data-i18n="metadataSourceUrl">元数据源URL</label>
+                        <textarea id="metadata-source-url" rows="3" placeholder="https://raw.githubusercontent.com/****.m3u&#10;https://raw.githubusercontent.com/****.md"></textarea>
+                        <small data-i18n="metadataSourceUrlHint">在线元数据文件地址，支持M3U和Markdown格式，多个URL用逗号或换行分隔</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="epg-url" data-i18n="epgUrl">EPG URL</label>
+                        <input type="text" id="epg-url" placeholder="https://raw.githubusercontent.com/****.xml">
+                        <small data-i18n="epgUrlHint">EPG节目指南数据源地址（XML格式）</small>
+                    </div>
+
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="databaseConfig">数据库配置</h3>
+
+                    <div class="form-group">
+                        <label for="db-type" data-i18n="databaseType">数据库类型</label>
                         <select id="db-type" onchange="toggleDatabaseConfig()">
-                            <option value="json">JSON File (默认 / Default)</option>
                             <option value="sqlite">SQLite (config/iptv.db)</option>
                             <option value="postgresql">PostgreSQL</option>
                         </select>
-                        <small>选择数据存储方式 / Select data storage method</small>
+                        <small data-i18n="databaseTypeHint">选择数据存储方式</small>
                     </div>
 
                     <div id="postgresql-config" style="display: none;">
                         <div class="form-group">
-                            <label for="pg-host">主机 / Host:</label>
+                            <label for="pg-host" data-i18n="host">主机</label>
                             <input type="text" id="pg-host" value="localhost" placeholder="localhost">
                         </div>
 
                         <div class="form-group">
-                            <label for="pg-port">端口 / Port:</label>
+                            <label for="pg-port" data-i18n="port">端口</label>
                             <input type="number" id="pg-port" value="5432" placeholder="5432">
                         </div>
 
                         <div class="form-group">
-                            <label for="pg-database">数据库名 / Database:</label>
+                            <label for="pg-database" data-i18n="database">数据库名</label>
                             <input type="text" id="pg-database" value="iptv" placeholder="iptv">
                         </div>
 
                         <div class="form-group">
-                            <label for="pg-user">用户名 / User:</label>
+                            <label for="pg-user" data-i18n="user">用户名</label>
                             <input type="text" id="pg-user" value="postgres" placeholder="postgres">
                         </div>
 
                         <div class="form-group">
-                            <label for="pg-password">密码 / Password:</label>
+                            <label for="pg-password" data-i18n="password">密码</label>
                             <input type="password" id="pg-password" placeholder="password">
                         </div>
                     </div>

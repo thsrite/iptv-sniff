@@ -29,6 +29,7 @@ const translations = {
         // Channels Tab
         channelsLibrary: '电视频道库',
         importM3u: '导入M3U',
+        syncMetadata: '同步元数据',
         aiRecognize: 'AI识别频道',
         clearNames: '清空频道名',
         exportM3u: '导出M3U',
@@ -49,6 +50,10 @@ const translations = {
         startImport: '开始导入',
         importing: '导入中...',
         importSuccess: '导入成功',
+
+        // Sync Metadata
+        confirmSyncMetadata: '确认从配置的URL同步元数据（logo、catchup等）？\n这将根据频道名匹配并更新现有频道的元数据。',
+        syncing: '同步中...',
 
         // Table Headers
         screenshot: '截图',
@@ -84,12 +89,35 @@ const translations = {
 
         // Settings Tab
         advancedSettingsTitle: '高级设置',
+        language: '语言',
         timeout: '超时（秒）',
         timeoutHint: '等待流响应的最大时间',
         queueSize: '并发队列大小',
         queueSizeHint: '同时测试的流数量（默认：5）',
         customParams: '自定义FFmpeg参数',
         customParamsHint: '附加的FFmpeg参数（如硬件加速）',
+
+        // URL Configuration
+        urlConfig: 'URL配置',
+        externalBaseUrl: '外网Base URL',
+        externalBaseUrlHint: '导出M3U时使用外网URL替换内网URL（可选）',
+
+        // Metadata Source Configuration
+        metadataSourceConfig: '元数据源配置',
+        metadataSourceUrl: '元数据源URL',
+        metadataSourceUrlHint: '在线元数据文件地址，支持M3U和Markdown格式，多个URL用逗号或换行分隔',
+        epgUrl: 'EPG URL',
+        epgUrlHint: 'EPG节目指南数据源地址（XML格式）',
+
+        // Database Configuration
+        databaseConfig: '数据库配置',
+        databaseType: '数据库类型',
+        databaseTypeHint: '选择数据存储方式',
+        host: '主机',
+        port: '端口',
+        database: '数据库名',
+        user: '用户名',
+        password: '密码',
 
         // AI Settings
         aiConfiguration: 'AI模型配置',
@@ -165,6 +193,7 @@ const translations = {
         // Channels Tab
         channelsLibrary: 'TV Channels Library',
         importM3u: 'Import M3U',
+        syncMetadata: 'Sync Metadata',
         aiRecognize: 'AI Recognize',
         clearNames: 'Clear Names',
         exportM3u: 'Export M3U',
@@ -185,6 +214,10 @@ const translations = {
         startImport: 'Start Import',
         importing: 'Importing...',
         importSuccess: 'Import Successful',
+
+        // Sync Metadata
+        confirmSyncMetadata: 'Confirm syncing metadata (logo, catchup, etc.) from configured URL?\nThis will match channels by name and update their metadata.',
+        syncing: 'Syncing...',
 
         // Table Headers
         screenshot: 'Screenshot',
@@ -220,12 +253,35 @@ const translations = {
 
         // Settings Tab
         advancedSettingsTitle: 'Advanced Settings',
+        language: 'Language',
         timeout: 'Timeout (seconds)',
         timeoutHint: 'Maximum time to wait for stream response',
         queueSize: 'Concurrent Queue Size',
         queueSizeHint: 'Number of streams to test simultaneously (default: 5)',
         customParams: 'Custom FFmpeg Parameters',
         customParamsHint: 'Additional FFmpeg parameters (e.g., hardware acceleration)',
+
+        // URL Configuration
+        urlConfig: 'URL Configuration',
+        externalBaseUrl: 'External Base URL',
+        externalBaseUrlHint: 'Replace internal URLs with external URLs when exporting M3U (optional)',
+
+        // Metadata Source Configuration
+        metadataSourceConfig: 'Metadata Source Configuration',
+        metadataSourceUrl: 'Metadata Source URL',
+        metadataSourceUrlHint: 'Online metadata file URLs (M3U, Markdown). Separate multiple URLs with comma or newline',
+        epgUrl: 'EPG URL',
+        epgUrlHint: 'EPG program guide data source URL (XML format)',
+
+        // Database Configuration
+        databaseConfig: 'Database Configuration',
+        databaseType: 'Database Type',
+        databaseTypeHint: 'Select data storage method',
+        host: 'Host',
+        port: 'Port',
+        database: 'Database',
+        user: 'User',
+        password: 'Password',
 
         // AI Settings
         aiConfiguration: 'AI Model Configuration',

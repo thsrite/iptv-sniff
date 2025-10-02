@@ -13,108 +13,16 @@ class Database:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.db_type = config.get('database', {}).get('type', 'json')
+        self.db_type = config.get('database', {}).get('type', 'sqlite')
 
-        if self.db_type == 'sqlite':
-            self.db = SQLiteDatabase(config)
-        elif self.db_type == 'postgresql':
+        if self.db_type == 'postgresql':
             self.db = PostgreSQLDatabase(config)
         else:
-            self.db = JSONDatabase(config)
+            # Default to SQLite
+            self.db = SQLiteDatabase(config)
 
     def __getattr__(self, name):
         return getattr(self.db, name)
-
-
-class JSONDatabase:
-    """JSON file-based storage (original implementation)"""
-
-    def __init__(self, config: Dict[str, Any]):
-        self.channels_file = 'tv_channels.json'
-        self.groups_file = 'tv_groups.json'
-        self.results_file = 'results.json'
-
-    # Channels
-    def get_all_channels(self) -> Dict[str, Any]:
-        if os.path.exists(self.channels_file):
-            with open(self.channels_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-
-    def save_channels(self, channels: Dict[str, Any]):
-        with open(self.channels_file, 'w', encoding='utf-8') as f:
-            json.dump(channels, f, ensure_ascii=False, indent=2)
-
-    def get_channel(self, ip: str) -> Optional[Dict[str, Any]]:
-        channels = self.get_all_channels()
-        return channels.get(ip)
-
-    def update_channel(self, ip: str, data: Dict[str, Any]):
-        channels = self.get_all_channels()
-        if ip not in channels:
-            channels[ip] = {}
-        channels[ip].update(data)
-        self.save_channels(channels)
-
-    def delete_channel(self, ip: str):
-        channels = self.get_all_channels()
-        if ip in channels:
-            del channels[ip]
-            self.save_channels(channels)
-
-    # Groups
-    def get_all_groups(self) -> Dict[str, Any]:
-        if os.path.exists(self.groups_file):
-            with open(self.groups_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-
-    def save_groups(self, groups: Dict[str, Any]):
-        with open(self.groups_file, 'w', encoding='utf-8') as f:
-            json.dump(groups, f, ensure_ascii=False, indent=2)
-
-    def get_group(self, group_id: str) -> Optional[Dict[str, Any]]:
-        groups = self.get_all_groups()
-        return groups.get(group_id)
-
-    def update_group(self, group_id: str, data: Dict[str, Any]):
-        groups = self.get_all_groups()
-        if group_id not in groups:
-            groups[group_id] = {}
-        groups[group_id].update(data)
-        self.save_groups(groups)
-
-    def delete_group(self, group_id: str):
-        groups = self.get_all_groups()
-        if group_id in groups:
-            del groups[group_id]
-            self.save_groups(groups)
-
-    # Test Results
-    def get_all_results(self) -> Dict[str, Any]:
-        if os.path.exists(self.results_file):
-            with open(self.results_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-
-    def save_results(self, results: Dict[str, Any]):
-        with open(self.results_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-
-    def get_result(self, test_id: str) -> Optional[Dict[str, Any]]:
-        results = self.get_all_results()
-        return results.get(test_id)
-
-    def update_result(self, test_id: str, data: Dict[str, Any]):
-        results = self.get_all_results()
-        results[test_id] = data
-        self.save_results(results)
-
-    def delete_result(self, test_id: str):
-        results = self.get_all_results()
-        if test_id in results:
-            del results[test_id]
-            self.save_results(results)
 
 
 class SQLiteDatabase:
