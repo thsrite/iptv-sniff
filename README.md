@@ -63,7 +63,7 @@ brew install ffmpeg
 python main.py
 ```
 
-访问 `http://localhost:9832` 即可使用。
+访问 `http://localhost:9833` 即可使用。
 
 ## 使用说明
 
