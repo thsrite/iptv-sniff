@@ -66,7 +66,9 @@ python main.py
 访问 `http://localhost:9833` 即可使用。
 
 ## 使用说明
-
+![IMG_4838.JPG](image/IMG_4838.JPG)
+![IMG_4839.JPG](image/IMG_4839.JPG)
+![IMG_4840.JPG](image/IMG_4840.JPG)
 ### 1. 流测试
 
 在"Stream Test"标签页中：
