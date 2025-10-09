@@ -222,7 +222,6 @@ iptv-sniff/
 ├── config/                # 配置文件目录
 ├── requirements.txt       # Python依赖
 ├── Dockerfile            # Docker镜像构建文件
-└── docker-entrypoint.sh  # Docker入口脚本
 ```
 
 ## 数据文件
