@@ -94,8 +94,8 @@ const translations = {
         timeoutHint: '等待流响应的最大时间',
         queueSize: '并发队列大小',
         queueSizeHint: '同时测试的流数量（默认：5）',
-        customParams: '自定义FFmpeg参数',
-        customParamsHint: '附加的FFmpeg参数（如硬件加速）',
+//        customParams: '自定义FFmpeg参数',
+//        customParamsHint: '附加的FFmpeg参数（如硬件加速）',
 
         // URL Configuration
         urlConfig: 'URL配置',
