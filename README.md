@@ -7,7 +7,13 @@ IPTV流嗅探工具，用于批量测试IPTV流地址的可用性，支持自动
 </div>
 
 ## 功能特性
-
+<table>
+  <tr>
+    <td><img src="image/IMG_4838.JPG" width="200"/></td>
+    <td><img src="image/IMG_4839.JPG" width="200"/></td>
+    <td><img src="image/IMG_4840.JPG" width="200"/></td>
+  </tr>
+</table>
 ### 核心功能
 - 🔍 **批量测试**：自动遍历IP范围，批量测试IPTV流的可用性
 - 📸 **自动截图**：对可用的流进行截图保存，支持分辨率检测
@@ -66,9 +72,7 @@ python main.py
 访问 `http://localhost:9833` 即可使用。
 
 ## 使用说明
-![IMG_4838.JPG](image/IMG_4838.JPG)
-![IMG_4839.JPG](image/IMG_4839.JPG)
-![IMG_4840.JPG](image/IMG_4840.JPG)
+
 ### 1. 流测试
 
 在"Stream Test"标签页中：
