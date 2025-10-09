@@ -40,16 +40,11 @@ COPY --from=builder /root/.local /root/.local
 # Set working directory
 WORKDIR /app
 
-# Copy entrypoint script first (less likely to change)
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 # Copy application code last (most likely to change)
 COPY . .
 
 # Expose port
 EXPOSE 9833
 
-# Set entrypoint and default command
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# Set default command
 CMD ["python", "main.py"]

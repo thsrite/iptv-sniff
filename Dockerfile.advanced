@@ -130,14 +130,9 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
     python -m pip install --no-cache-dir -r requirements.txt && \
     mkdir -p /app/downloads /app/config
 
-# Copy entrypoint script separately to avoid cache invalidation
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 # Copy application source code
 COPY . .
 
 EXPOSE 9833
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["python", "main.py"]
