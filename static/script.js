@@ -97,7 +97,8 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     const timeout = timeoutValue ? parseInt(timeoutValue) : 10; // Default to 10 if empty
     const queueSizeValue = document.getElementById('queue-size').value;
     const queueSize = queueSizeValue ? parseInt(queueSizeValue) : 5; // Default to 5 if empty
-    const customParams = document.getElementById('custom-params').value;
+    const customParamsEl = document.getElementById('custom-params');
+    const customParams = customParamsEl ? customParamsEl.value : '';
 
     // Get database configuration
     const dbType = document.getElementById('db-type').value;
@@ -259,16 +260,29 @@ async function loadConfig() {
             document.getElementById('queue-size').value = '';
         }
 
-        document.getElementById('custom-params').value = config.custom_params || '';
+        // Load custom params if element exists (currently commented out in HTML)
+        const customParamsElement = document.getElementById('custom-params');
+        if (customParamsElement) {
+            customParamsElement.value = config.custom_params || '';
+        }
 
         // Load metadata source URL
-        document.getElementById('metadata-source-url').value = config.metadata_source_url || '';
+        const metadataSourceUrlElement = document.getElementById('metadata-source-url');
+        if (metadataSourceUrlElement) {
+            metadataSourceUrlElement.value = config.metadata_source_url || '';
+        }
 
         // Load EPG URL
-        document.getElementById('epg-url').value = config.epg_url || '';
+        const epgUrlElement = document.getElementById('epg-url');
+        if (epgUrlElement) {
+            epgUrlElement.value = config.epg_url || '';
+        }
 
         // Load external base URL
-        document.getElementById('external-base-url').value = config.external_base_url || '';
+        const externalBaseUrlElement = document.getElementById('external-base-url');
+        if (externalBaseUrlElement) {
+            externalBaseUrlElement.value = config.external_base_url || '';
+        }
 
         // Show/hide NET link based on external_base_url configuration
         const netLinkContainer = document.getElementById('net-link-container');
@@ -310,13 +324,24 @@ async function loadConfig() {
         document.getElementById('language-select').value = i18n.getLanguage();
     } catch (error) {
         console.error('Failed to load configuration:', error);
-        // Set all fields to empty on error
-        document.getElementById('base-url').value = '';
-        document.getElementById('start-ip').value = '';
-        document.getElementById('end-ip').value = '';
-        document.getElementById('timeout').value = '';
-        document.getElementById('queue-size').value = '';
-        document.getElementById('custom-params').value = '';
+        // Set all fields to empty on error, checking if elements exist first
+        const baseUrlEl = document.getElementById('base-url');
+        if (baseUrlEl) baseUrlEl.value = '';
+
+        const startIpEl = document.getElementById('start-ip');
+        if (startIpEl) startIpEl.value = '';
+
+        const endIpEl = document.getElementById('end-ip');
+        if (endIpEl) endIpEl.value = '';
+
+        const timeoutEl = document.getElementById('timeout');
+        if (timeoutEl) timeoutEl.value = '';
+
+        const queueSizeEl = document.getElementById('queue-size');
+        if (queueSizeEl) queueSizeEl.value = '';
+
+        const customParamsEl = document.getElementById('custom-params');
+        if (customParamsEl) customParamsEl.value = '';
     }
 }
 
