@@ -118,6 +118,9 @@
                         <button id="sync-metadata-btn" class="btn btn-info btn-small">
                             <span>🔄</span> <span data-i18n="syncMetadata">同步元数据</span>
                         </button>
+                        <button id="check-duplicates-btn" class="btn btn-warning btn-small">
+                            <span>🔍</span> <span data-i18n="checkDuplicates">检测重复</span>
+                        </button>
                         <button id="export-channels-btn" class="btn btn-success btn-small" data-i18n="exportM3u">Export M3U</button>
                         <span id="channels-count" style="margin-left: 15px; color: #667eea; font-weight: 600;"></span>
                     </div>
@@ -208,6 +211,7 @@
                                 <th data-i18n="url">URL</th>
                                 <th data-i18n="playback">回放</th>
                                 <th data-i18n="updateTime">更新时间</th>
+                                <th data-i18n="actions">操作</th>
                             </tr>
                         </thead>
                         <tbody id="channels-tbody">
@@ -518,6 +522,23 @@
             <div class="modal-footer">
                 <button class="btn btn-primary" onclick="startImportM3u()" id="import-confirm-btn" data-i18n="startImport">开始导入</button>
                 <button class="btn" onclick="closeImportM3uModal()" data-i18n="cancel">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Duplicates Detection Modal -->
+    <div id="duplicates-modal" class="modal" style="display: none;">
+        <div class="modal-content" style="width: 800px; max-height: 80vh;">
+            <div class="modal-header">
+                <h3>🔍 重复频道检测结果</h3>
+                <span class="modal-close-btn" onclick="closeDuplicatesModal()">&times;</span>
+            </div>
+            <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+                <div id="duplicates-stats" class="duplicates-stats"></div>
+                <div id="duplicates-content" class="duplicates-content"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeDuplicatesModal()">关闭</button>
             </div>
         </div>
     </div>

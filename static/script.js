@@ -1558,6 +1558,23 @@ function createChannelRow(ip, channel) {
     row.appendChild(playbackTd);
     row.appendChild(timeTd);
 
+    // 操作 column (delete button)
+    const actionsTd = document.createElement('td');
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'channel-actions';
+    actionsDiv.style.display = 'flex';
+    actionsDiv.style.gap = '5px';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn-icon btn-delete';
+    deleteBtn.innerHTML = '🗑️';
+    deleteBtn.title = '删除频道';
+    deleteBtn.onclick = () => deleteChannel(ip, channel.name || ip);
+
+    actionsDiv.appendChild(deleteBtn);
+    actionsTd.appendChild(actionsDiv);
+    row.appendChild(actionsTd);
+
     return row;
 }
 
@@ -2182,6 +2199,307 @@ document.getElementById('export-channels-btn').addEventListener('click', async (
         alert('Failed to export channels: ' + error.message);
     }
 });
+
+// Delete channel function
+async function deleteChannel(ip, name) {
+    const confirmMsg = name ? `确定要删除频道 "${name}" (${ip}) 吗？` : `确定要删除频道 ${ip} 吗？`;
+
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/channels/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ ip: ip })
+        });
+
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            // Remove from UI
+            const row = document.querySelector(`tr[data-ip="${ip}"]`);
+            if (row) {
+                row.remove();
+            }
+
+            // Update local cache
+            if (Array.isArray(allChannels)) {
+                const index = allChannels.findIndex(ch => ch.ip === ip);
+                if (index !== -1) {
+                    allChannels.splice(index, 1);
+                }
+            } else if (allChannels[ip]) {
+                delete allChannels[ip];
+            }
+
+            if (allChannelsCache) {
+                if (Array.isArray(allChannelsCache)) {
+                    const index = allChannelsCache.findIndex(ch => ch.ip === ip);
+                    if (index !== -1) {
+                        allChannelsCache.splice(index, 1);
+                    }
+                } else if (allChannelsCache[ip]) {
+                    delete allChannelsCache[ip];
+                }
+            }
+
+            // Update channel count
+            loadChannels();
+        } else {
+            alert('删除失败: ' + result.message);
+        }
+    } catch (error) {
+        console.error('Failed to delete channel:', error);
+        alert('删除失败: ' + error.message);
+    }
+}
+
+// Check duplicates function
+async function checkDuplicates() {
+    try {
+        const response = await fetch('/api/channels/duplicates');
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            alert('检测失败');
+            return;
+        }
+
+        const duplicates = data.duplicates;
+        const stats = data.stats;
+
+        // Show modal
+        showDuplicatesModal(duplicates, stats);
+
+        // Also log to console for detailed inspection
+        console.log('Duplicates detected:', duplicates);
+        console.log('Stats:', stats);
+
+    } catch (error) {
+        console.error('Failed to check duplicates:', error);
+        alert('检测失败: ' + error.message);
+    }
+}
+
+// Show duplicates modal
+function showDuplicatesModal(duplicates, stats) {
+    const modal = document.getElementById('duplicates-modal');
+    const statsDiv = document.getElementById('duplicates-stats');
+    const contentDiv = document.getElementById('duplicates-content');
+
+    // Clear previous content
+    statsDiv.innerHTML = '';
+    contentDiv.innerHTML = '';
+
+    // Check if no duplicates
+    if (stats.duplicate_url_groups === 0 && stats.duplicate_name_groups === 0) {
+        contentDiv.innerHTML = `
+            <div class="no-duplicates">
+                <div class="no-duplicates-icon">✓</div>
+                <div class="no-duplicates-text">未发现重复频道</div>
+            </div>
+        `;
+        modal.style.display = 'flex';
+        return;
+    }
+
+    // Build stats display
+    statsDiv.innerHTML = `
+        <div class="duplicates-stat-item">
+            <span class="duplicates-stat-value">${stats.duplicate_url_groups}</span>
+            <span class="duplicates-stat-label">相同URL组</span>
+        </div>
+        <div class="duplicates-stat-item">
+            <span class="duplicates-stat-value">${stats.total_url_duplicates}</span>
+            <span class="duplicates-stat-label">URL重复频道</span>
+        </div>
+        <div class="duplicates-stat-item">
+            <span class="duplicates-stat-value">${stats.duplicate_name_groups}</span>
+            <span class="duplicates-stat-label">相同名称组</span>
+        </div>
+        <div class="duplicates-stat-item">
+            <span class="duplicates-stat-value">${stats.total_name_duplicates}</span>
+            <span class="duplicates-stat-label">名称重复频道</span>
+        </div>
+    `;
+
+    // Build content
+    let contentHTML = '';
+
+    // URL duplicates
+    if (duplicates.by_url.length > 0) {
+        contentHTML += `
+            <div class="duplicate-section">
+                <div class="duplicate-section-header">
+                    <span class="duplicate-section-title">📡 相同URL的频道</span>
+                    <span class="duplicate-section-badge">${duplicates.by_url.length} 组</span>
+                </div>
+        `;
+
+        duplicates.by_url.forEach((group, groupIndex) => {
+            contentHTML += `
+                <div class="duplicate-group">
+                    <div class="duplicate-group-header">
+                        <strong>组 ${groupIndex + 1}:</strong> ${group.url}
+                    </div>
+            `;
+
+            group.channels.forEach(ch => {
+                contentHTML += createDuplicateChannelHTML(ch);
+            });
+
+            contentHTML += '</div>';
+        });
+
+        contentHTML += '</div>';
+    }
+
+    // Name duplicates
+    if (duplicates.by_name.length > 0) {
+        contentHTML += `
+            <div class="duplicate-section">
+                <div class="duplicate-section-header">
+                    <span class="duplicate-section-title">📺 相同名称的频道</span>
+                    <span class="duplicate-section-badge">${duplicates.by_name.length} 组</span>
+                </div>
+        `;
+
+        duplicates.by_name.forEach((group, groupIndex) => {
+            contentHTML += `
+                <div class="duplicate-group">
+                    <div class="duplicate-group-header">
+                        <strong>组 ${groupIndex + 1}:</strong> ${group.name}
+                    </div>
+            `;
+
+            group.channels.forEach(ch => {
+                contentHTML += createDuplicateChannelHTML(ch);
+            });
+
+            contentHTML += '</div>';
+        });
+
+        contentHTML += '</div>';
+    }
+
+    contentDiv.innerHTML = contentHTML;
+    modal.style.display = 'flex';
+}
+
+// Create duplicate channel HTML
+function createDuplicateChannelHTML(channel) {
+    const resolution = channel.resolution || '未知';
+    const connectivity = channel.connectivity || 'untested';
+
+    // Determine resolution badge class
+    let resolutionClass = 'badge-resolution';
+    if (resolution.includes('3840') || resolution.includes('4K')) {
+        resolutionClass = 'badge-resolution-4k';
+    } else if (resolution.includes('1920')) {
+        resolutionClass = 'badge-resolution-1080p';
+    } else if (resolution.includes('1280') || resolution.includes('720')) {
+        resolutionClass = 'badge-resolution-720p';
+    }
+
+    // Determine connectivity badge class
+    let connectivityClass = `badge-connectivity-${connectivity}`;
+    let connectivityText = connectivity;
+    if (connectivity === 'online') connectivityText = '在线';
+    else if (connectivity === 'offline') connectivityText = '离线';
+    else if (connectivity === 'failed') connectivityText = '失败';
+    else if (connectivity === 'untested') connectivityText = '未测试';
+
+    return `
+        <div class="duplicate-channel" data-ip="${channel.ip}">
+            <div class="duplicate-channel-info">
+                <span class="duplicate-channel-ip">${channel.ip}</span>
+                <span class="duplicate-channel-name">${channel.name || '(无名称)'}</span>
+                <div class="duplicate-channel-badges">
+                    <span class="duplicate-badge ${resolutionClass}">${resolution}</span>
+                    <span class="duplicate-badge ${connectivityClass}">${connectivityText}</span>
+                </div>
+            </div>
+            <div class="duplicate-channel-actions">
+                <button class="btn-delete-duplicate" onclick="deleteChannelFromDuplicates('${channel.ip}', '${(channel.name || '').replace(/'/g, "\\'")}')">
+                    🗑️ 删除
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+// Delete channel from duplicates modal
+async function deleteChannelFromDuplicates(ip, name) {
+    const confirmMsg = name ? `确定要删除频道 "${name}" (${ip}) 吗？` : `确定要删除频道 ${ip} 吗？`;
+
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/channels/delete', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ ip: ip })
+        });
+
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            // Remove from modal UI
+            const channelDiv = document.querySelector(`.duplicate-channel[data-ip="${ip}"]`);
+            if (channelDiv) {
+                channelDiv.remove();
+            }
+
+            // Update local cache
+            if (Array.isArray(allChannels)) {
+                const index = allChannels.findIndex(ch => ch.ip === ip);
+                if (index !== -1) {
+                    allChannels.splice(index, 1);
+                }
+            } else if (allChannels[ip]) {
+                delete allChannels[ip];
+            }
+
+            if (allChannelsCache) {
+                if (Array.isArray(allChannelsCache)) {
+                    const index = allChannelsCache.findIndex(ch => ch.ip === ip);
+                    if (index !== -1) {
+                        allChannelsCache.splice(index, 1);
+                    }
+                } else if (allChannelsCache[ip]) {
+                    delete allChannelsCache[ip];
+                }
+            }
+
+            // Refresh the duplicates check
+            checkDuplicates();
+        } else {
+            alert('删除失败: ' + result.message);
+        }
+    } catch (error) {
+        console.error('Failed to delete channel:', error);
+        alert('删除失败: ' + error.message);
+    }
+}
+
+// Close duplicates modal
+function closeDuplicatesModal() {
+    const modal = document.getElementById('duplicates-modal');
+    modal.style.display = 'none';
+    // Reload channels to reflect any deletions
+    loadChannels();
+}
+
+// Bind check duplicates button
+document.getElementById('check-duplicates-btn').addEventListener('click', checkDuplicates);
 
 // Groups management
 let currentGroupId = null;

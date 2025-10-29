@@ -1649,6 +1649,85 @@ def update_channel_name():
         return jsonify({"status": "error", "message": "Channel not found"}), 404
 
 
+@app.route('/api/channels/delete', methods=['POST'])
+def delete_channel():
+    """Delete a channel"""
+    data = request.json
+    ip = data.get('ip')
+
+    if not ip:
+        return jsonify({"status": "error", "message": "IP required"}), 400
+
+    # Delete from memory
+    if ip in tv_channels:
+        del tv_channels[ip]
+
+        # Delete from database
+        db.delete_channel(ip)
+
+        # Also remove from any groups
+        for group in groups.values():
+            if ip in group.get('channels', []):
+                group['channels'].remove(ip)
+        save_groups()
+
+        return jsonify({"status": "success"})
+    else:
+        return jsonify({"status": "error", "message": "Channel not found"}), 404
+
+
+@app.route('/api/channels/duplicates', methods=['GET'])
+def get_duplicates():
+    """Get duplicate channels based on IP or URL"""
+    url_groups = {}
+    name_groups = {}
+
+    for ip, channel in tv_channels.items():
+        # Group by URL
+        url = channel.get('url', '')
+        if url:
+            if url not in url_groups:
+                url_groups[url] = []
+            url_groups[url].append({
+                'ip': ip,
+                'name': channel.get('name', ''),
+                'url': url,
+                'resolution': channel.get('resolution', ''),
+                'connectivity': channel.get('connectivity', '')
+            })
+
+        # Group by name (if name is not empty)
+        name = channel.get('name', '').strip()
+        if name:
+            name_lower = name.lower()
+            if name_lower not in name_groups:
+                name_groups[name_lower] = []
+            name_groups[name_lower].append({
+                'ip': ip,
+                'name': channel.get('name', ''),
+                'url': url,
+                'resolution': channel.get('resolution', ''),
+                'connectivity': channel.get('connectivity', '')
+            })
+
+    # Filter to only include actual duplicates (more than 1 channel)
+    duplicates = {
+        'by_url': [{'url': url, 'channels': channels} for url, channels in url_groups.items() if len(channels) > 1],
+        'by_name': [{'name': channels[0]['name'], 'channels': channels} for name, channels in name_groups.items() if len(channels) > 1]
+    }
+
+    return jsonify({
+        "status": "success",
+        "duplicates": duplicates,
+        "stats": {
+            "total_url_duplicates": sum(len(d['channels']) for d in duplicates['by_url']),
+            "total_name_duplicates": sum(len(d['channels']) for d in duplicates['by_name']),
+            "duplicate_url_groups": len(duplicates['by_url']),
+            "duplicate_name_groups": len(duplicates['by_name'])
+        }
+    })
+
+
 @app.route('/api/channels/upload-logo', methods=['POST'])
 def upload_channel_logo():
     """Upload logo for a channel"""

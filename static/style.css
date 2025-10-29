@@ -1532,6 +1532,24 @@ textarea {
     opacity: 1;
 }
 
+.btn-delete {
+    font-size: 16px;
+    transition: transform 0.2s, opacity 0.2s;
+}
+
+.btn-delete:hover {
+    transform: scale(1.2);
+    opacity: 1;
+    filter: brightness(1.2);
+}
+
+.channel-actions {
+    display: flex;
+    gap: 5px;
+    justify-content: center;
+    align-items: center;
+}
+
 .no-groups {
     color: #999;
     text-align: center;
@@ -2198,4 +2216,219 @@ textarea {
         font-size: 0.75rem;
         padding: 6px 10px;
     }
+}
+
+/* Duplicates Detection Modal Styles */
+.duplicates-stats {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-around;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.duplicates-stat-item {
+    text-align: center;
+}
+
+.duplicates-stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 5px;
+}
+
+.duplicates-stat-label {
+    font-size: 0.9rem;
+    opacity: 0.9;
+}
+
+.duplicates-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.duplicate-section {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.duplicate-section-header {
+    background: #f7fafc;
+    padding: 12px 15px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.duplicate-section-title {
+    font-weight: 600;
+    color: #2d3748;
+    font-size: 1rem;
+}
+
+.duplicate-section-badge {
+    background: #667eea;
+    color: white;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.duplicate-group {
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.duplicate-group:last-child {
+    border-bottom: none;
+}
+
+.duplicate-group-header {
+    background: #fafafa;
+    padding: 10px 15px;
+    font-size: 0.9rem;
+    color: #666;
+    border-bottom: 1px solid #e8e8e8;
+}
+
+.duplicate-channel {
+    padding: 12px 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #f5f5f5;
+    transition: background 0.2s;
+}
+
+.duplicate-channel:last-child {
+    border-bottom: none;
+}
+
+.duplicate-channel:hover {
+    background: #f9fafb;
+}
+
+.duplicate-channel-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.duplicate-channel-ip {
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-weight: 600;
+    color: #4a5568;
+    min-width: 140px;
+}
+
+.duplicate-channel-name {
+    color: #2d3748;
+    font-weight: 500;
+}
+
+.duplicate-channel-badges {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.duplicate-badge {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.badge-resolution {
+    background: #e0e7ff;
+    color: #4c51bf;
+}
+
+.badge-resolution-4k {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.badge-resolution-1080p {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.badge-resolution-720p {
+    background: #e0e7ff;
+    color: #5b21b6;
+}
+
+.badge-connectivity-online {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.badge-connectivity-offline {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.badge-connectivity-failed {
+    background: #fecaca;
+    color: #7f1d1d;
+}
+
+.badge-connectivity-untested {
+    background: #e5e7eb;
+    color: #6b7280;
+}
+
+.duplicate-channel-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.btn-delete-duplicate {
+    background: #ef4444;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-delete-duplicate:hover {
+    background: #dc2626;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
+}
+
+.btn-delete-duplicate:active {
+    transform: translateY(0);
+}
+
+.no-duplicates {
+    text-align: center;
+    padding: 40px 20px;
+    color: #10b981;
+}
+
+.no-duplicates-icon {
+    font-size: 3rem;
+    margin-bottom: 10px;
+}
+
+.no-duplicates-text {
+    font-size: 1.1rem;
+    font-weight: 600;
 }
