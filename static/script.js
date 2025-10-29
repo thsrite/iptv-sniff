@@ -133,7 +133,14 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
     // Get external base URL
     const externalBaseUrl = document.getElementById('external-base-url').value;
 
+    // Get scheduled tasks configuration
+    const scheduledTestConnectivityEnabled = document.getElementById('scheduled-test-connectivity-enabled').checked;
+    const testConnectivityInterval = parseInt(document.getElementById('test-connectivity-interval').value) || 24;
+    const scheduledSyncMetadataEnabled = document.getElementById('scheduled-sync-metadata-enabled').checked;
+    const syncMetadataInterval = parseInt(document.getElementById('sync-metadata-interval').value) || 168;
+
     try {
+        // First, save the main configuration
         const response = await fetch('/api/config', {
             method: 'POST',
             headers: {
@@ -158,8 +165,35 @@ document.getElementById('config-form').addEventListener('submit', async (e) => {
 
         const data = await response.json();
 
-        if (data.status === 'success') {
-            alert('Configuration saved successfully! Please restart the application to apply database changes.');
+        if (data.status !== 'success') {
+            alert('Failed to save configuration');
+            return;
+        }
+
+        // Then, save the scheduled tasks configuration
+        const scheduledTasksResponse = await fetch('/api/scheduled-tasks', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                test_connectivity: {
+                    enabled: scheduledTestConnectivityEnabled,
+                    interval_hours: testConnectivityInterval
+                },
+                sync_metadata: {
+                    enabled: scheduledSyncMetadataEnabled,
+                    interval_hours: syncMetadataInterval
+                }
+            })
+        });
+
+        const scheduledTasksData = await scheduledTasksResponse.json();
+
+        if (scheduledTasksData.status === 'success') {
+            alert('Configuration and scheduled tasks saved successfully! Please restart the application to apply database changes.');
+        } else {
+            alert('Configuration saved but failed to save scheduled tasks: ' + scheduledTasksData.message);
         }
     } catch (error) {
         alert('Failed to save configuration: ' + error.message);
@@ -318,6 +352,44 @@ async function loadConfig() {
             document.getElementById('ai-api-url').value = config.ai_model.api_url || '';
             document.getElementById('ai-api-key').value = config.ai_model.api_key || '';
             document.getElementById('ai-model').value = config.ai_model.model || 'gpt-4-vision-preview';
+        }
+
+        // Load scheduled tasks configuration
+        try {
+            const scheduledTasksResponse = await fetch('/api/scheduled-tasks');
+            const scheduledTasks = await scheduledTasksResponse.json();
+
+            // Load test connectivity scheduled task
+            if (scheduledTasks.test_connectivity) {
+                document.getElementById('scheduled-test-connectivity-enabled').checked = scheduledTasks.test_connectivity.enabled || false;
+                document.getElementById('test-connectivity-interval').value = scheduledTasks.test_connectivity.interval_hours || 24;
+
+                // Show/hide last run time
+                if (scheduledTasks.test_connectivity.last_run) {
+                    const lastRunDate = new Date(scheduledTasks.test_connectivity.last_run);
+                    document.getElementById('test-connectivity-last-run').textContent = lastRunDate.toLocaleString();
+                    document.getElementById('test-connectivity-last-run-group').style.display = 'block';
+                } else {
+                    document.getElementById('test-connectivity-last-run-group').style.display = 'none';
+                }
+            }
+
+            // Load sync metadata scheduled task
+            if (scheduledTasks.sync_metadata) {
+                document.getElementById('scheduled-sync-metadata-enabled').checked = scheduledTasks.sync_metadata.enabled || false;
+                document.getElementById('sync-metadata-interval').value = scheduledTasks.sync_metadata.interval_hours || 168;
+
+                // Show/hide last run time
+                if (scheduledTasks.sync_metadata.last_run) {
+                    const lastRunDate = new Date(scheduledTasks.sync_metadata.last_run);
+                    document.getElementById('sync-metadata-last-run').textContent = lastRunDate.toLocaleString();
+                    document.getElementById('sync-metadata-last-run-group').style.display = 'block';
+                } else {
+                    document.getElementById('sync-metadata-last-run-group').style.display = 'none';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load scheduled tasks configuration:', error);
         }
 
         // Set language dropdown to current language

@@ -128,6 +128,20 @@ const translations = {
         apiKeyHint: '您的AI模型API密钥（将安全存储）',
         model: '模型',
         modelHint: 'AI模型名称（如 gpt-4-vision-preview、claude-3-opus）',
+
+        // Scheduled Tasks
+        scheduledTasksConfig: '定时任务配置',
+        enableTestConnectivitySchedule: '启用定时连通性测试',
+        enableTestConnectivityScheduleHint: '自动周期性测试所有频道的连通性',
+        testConnectivityInterval: '连通性测试间隔（小时）',
+        testConnectivityIntervalHint: '每隔多少小时执行一次连通性测试（默认24小时）',
+        testConnectivityLastRun: '最后运行时间',
+        enableSyncMetadataSchedule: '启用定时元数据同步',
+        enableSyncMetadataScheduleHint: '自动周期性从在线源同步频道元数据',
+        syncMetadataInterval: '元数据同步间隔（小时）',
+        syncMetadataIntervalHint: '每隔多少小时执行一次元数据同步（默认168小时/7天）',
+        syncMetadataLastRun: '最后运行时间',
+
         saveConfig: '保存配置',
 
         // Modals
@@ -292,6 +306,20 @@ const translations = {
         apiKeyHint: 'Your AI model API key (will be stored securely)',
         model: 'Model',
         modelHint: 'AI model name (e.g., gpt-4-vision-preview, claude-3-opus)',
+
+        // Scheduled Tasks
+        scheduledTasksConfig: 'Scheduled Tasks Configuration',
+        enableTestConnectivitySchedule: 'Enable Scheduled Connectivity Test',
+        enableTestConnectivityScheduleHint: 'Automatically test connectivity of all channels periodically',
+        testConnectivityInterval: 'Connectivity Test Interval (hours)',
+        testConnectivityIntervalHint: 'How often to run connectivity test (default: 24 hours)',
+        testConnectivityLastRun: 'Last Run Time',
+        enableSyncMetadataSchedule: 'Enable Scheduled Metadata Sync',
+        enableSyncMetadataScheduleHint: 'Automatically sync channel metadata from online sources periodically',
+        syncMetadataInterval: 'Metadata Sync Interval (hours)',
+        syncMetadataIntervalHint: 'How often to run metadata sync (default: 168 hours / 7 days)',
+        syncMetadataLastRun: 'Last Run Time',
+
         saveConfig: 'Save Configuration',
 
         // Modals

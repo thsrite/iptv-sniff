@@ -416,6 +416,50 @@
                         <small data-i18n="modelHint">AI model name (e.g., gpt-4-vision-preview, claude-3-opus)</small>
                     </div>
 
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e0e0e0;">
+
+                    <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="scheduledTasksConfig">定时任务配置</h3>
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="scheduled-test-connectivity-enabled" style="margin-right: 8px;">
+                            <span data-i18n="enableTestConnectivitySchedule">启用定时连通性测试</span>
+                        </label>
+                        <small data-i18n="enableTestConnectivityScheduleHint">自动周期性测试所有频道的连通性</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="test-connectivity-interval" data-i18n="testConnectivityInterval">连通性测试间隔（小时）:</label>
+                        <input type="number" id="test-connectivity-interval" value="24" min="1" max="168" placeholder="24">
+                        <small data-i18n="testConnectivityIntervalHint">每隔多少小时执行一次连通性测试（默认24小时）</small>
+                    </div>
+
+                    <div class="form-group" id="test-connectivity-last-run-group" style="display: none;">
+                        <label data-i18n="testConnectivityLastRun">最后运行时间:</label>
+                        <div id="test-connectivity-last-run" style="color: #666; font-size: 14px;">从未运行</div>
+                    </div>
+
+                    <hr style="margin: 20px 0; border: none; border-top: 1px dashed #e0e0e0;">
+
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="scheduled-sync-metadata-enabled" style="margin-right: 8px;">
+                            <span data-i18n="enableSyncMetadataSchedule">启用定时元数据同步</span>
+                        </label>
+                        <small data-i18n="enableSyncMetadataScheduleHint">自动周期性从在线源同步频道元数据</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sync-metadata-interval" data-i18n="syncMetadataInterval">元数据同步间隔（小时）:</label>
+                        <input type="number" id="sync-metadata-interval" value="168" min="1" max="720" placeholder="168">
+                        <small data-i18n="syncMetadataIntervalHint">每隔多少小时执行一次元数据同步（默认168小时/7天）</small>
+                    </div>
+
+                    <div class="form-group" id="sync-metadata-last-run-group" style="display: none;">
+                        <label data-i18n="syncMetadataLastRun">最后运行时间:</label>
+                        <div id="sync-metadata-last-run" style="color: #666; font-size: 14px;">从未运行</div>
+                    </div>
+
                     <button type="submit" class="btn btn-primary" data-i18n="saveConfig">Save Configuration</button>
                 </form>
             </div>

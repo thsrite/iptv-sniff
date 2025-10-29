@@ -12,6 +12,9 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import uuid
 from db import Database
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import atexit
 
 app = Flask(__name__)
 CORS(app)
@@ -36,6 +39,13 @@ connectivity_tasks = {}  # Store connectivity test tasks status
 # Initialize database
 db = None
 
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# Shut down scheduler when app exits
+atexit.register(lambda: scheduler.shutdown())
+
 
 
 def load_config():
@@ -55,6 +65,392 @@ def save_config(config):
     """Save configuration to file"""
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def test_channel_connectivity_simple(ip):
+    """Simple connectivity test for a single channel (used by scheduled tasks)"""
+    global tv_channels
+
+    if ip not in tv_channels:
+        return False
+
+    channel = tv_channels[ip]
+    url = channel.get('url', '')
+
+    if not url:
+        tv_channels[ip]['connectivity'] = 'offline'
+        tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+        tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+        return False
+
+    try:
+        config = load_config()
+        timeout = config.get("timeout") or 10
+        if isinstance(timeout, str):
+            timeout = int(timeout)
+
+        # Test stream connectivity using ffprobe (lightweight)
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration:stream=codec_name',
+            '-of', 'json',
+            '-timeout', str(timeout * 1000000),
+            url
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout+5)
+
+        if result.returncode == 0:
+            tv_channels[ip]['connectivity'] = 'online'
+            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+            return True
+        else:
+            tv_channels[ip]['connectivity'] = 'offline'
+            tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+            tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+            return False
+
+    except Exception as e:
+        tv_channels[ip]['connectivity'] = 'offline'
+        tv_channels[ip]['connectivity_time'] = datetime.now().isoformat()
+        tv_channels[ip]['timestamp'] = datetime.now().isoformat()
+        return False
+
+
+def scheduled_test_connectivity():
+    """Scheduled task to test connectivity of all channels"""
+    global tv_channels
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Running connectivity test for all channels")
+
+        # Get all channel IPs
+        ips = list(tv_channels.keys())
+        if not ips:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] No channels to test")
+            return
+
+        # Test each channel's connectivity
+        online_count = 0
+        for ip in ips:
+            if test_channel_connectivity_simple(ip):
+                online_count += 1
+
+        # Save updated channels
+        save_channels()
+
+        # Update last run time in config
+        config = load_config()
+        if 'scheduled_tasks' not in config:
+            config['scheduled_tasks'] = {}
+        if 'test_connectivity' not in config['scheduled_tasks']:
+            config['scheduled_tasks']['test_connectivity'] = {}
+        config['scheduled_tasks']['test_connectivity']['last_run'] = datetime.now().isoformat()
+        save_config(config)
+
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Connectivity test completed: {online_count}/{len(ips)} channels online")
+
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Error in connectivity test: {str(e)}")
+
+
+def sync_metadata_core(metadata_urls):
+    """Core logic for syncing metadata from multiple online sources
+
+    Args:
+        metadata_urls: List of URLs to sync from
+
+    Returns:
+        dict: Statistics about the sync (urls_processed, matched, updated, etc.)
+    """
+    global tv_channels
+    import re
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting metadata sync from {len(metadata_urls)} URL(s)")
+
+    # Merged metadata map: {channel_name_lower: {logo, catchup, playback, tvg_id, ...}}
+    metadata_map = {}
+    url_stats = []  # Track stats for each URL
+
+    # Process each URL
+    for url_index, metadata_url in enumerate(metadata_urls, 1):
+        try:
+            # Convert GitHub URL to raw URL if needed
+            original_url = metadata_url
+            if 'github.com' in metadata_url and '/blob/' in metadata_url:
+                metadata_url = metadata_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
+
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{url_index}/{len(metadata_urls)}] Downloading from: {metadata_url}")
+
+            # Download content
+            response = requests.get(metadata_url, timeout=30)
+            response.raise_for_status()
+            content = response.text
+
+            # Skip XML files (EPG data)
+            if '.xml' in metadata_url.lower():
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: XML (EPG) - skipping metadata sync")
+                url_stats.append({
+                    'url': original_url,
+                    'format': 'XML (EPG)',
+                    'parsed': 0
+                })
+                continue
+
+            # Detect format: M3U or Markdown
+            is_m3u = False
+            is_markdown = False
+
+            # Check by URL extension
+            if '.m3u' in metadata_url.lower() or '.m3u8' in metadata_url.lower():
+                is_m3u = True
+            elif '.md' in metadata_url.lower() or 'readme' in metadata_url.lower():
+                is_markdown = True
+            else:
+                # Detect by content
+                if '#EXTINF' in content or '#EXTM3U' in content:
+                    is_m3u = True
+                elif re.search(r'.+?[：:]\s*\d+', content):  # Pattern: "name: number"
+                    is_markdown = True
+
+            # Parse based on detected format
+            parsed_count = 0
+            if is_m3u:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: M3U")
+                parsed_channels = parse_m3u(content)
+
+                for ch in parsed_channels:
+                    name_lower = ch['name'].lower().strip()
+                    if name_lower:
+                        # Only add fields that don't exist yet (first URL wins)
+                        if name_lower not in metadata_map:
+                            metadata_map[name_lower] = {}
+
+                        # Update only if field is empty
+                        if not metadata_map[name_lower].get('name'):
+                            metadata_map[name_lower]['name'] = ch.get('name', '')
+                        if not metadata_map[name_lower].get('logo') and ch.get('logo'):
+                            metadata_map[name_lower]['logo'] = ch.get('logo', '')
+                        if not metadata_map[name_lower].get('catchup') and ch.get('catchup'):
+                            metadata_map[name_lower]['catchup'] = ch.get('catchup', '')
+                        if not metadata_map[name_lower].get('playback') and ch.get('playback'):
+                            metadata_map[name_lower]['playback'] = ch.get('playback', '')
+                        if not metadata_map[name_lower].get('tvg_id') and ch.get('tvg_id'):
+                            metadata_map[name_lower]['tvg_id'] = ch.get('tvg_id', '')
+                        if not metadata_map[name_lower].get('group') and ch.get('group'):
+                            metadata_map[name_lower]['group'] = ch.get('group', '')
+
+                        parsed_count += 1
+
+                url_stats.append({
+                    'url': original_url,
+                    'format': 'M3U',
+                    'parsed': len(parsed_channels)
+                })
+
+            elif is_markdown:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: Markdown")
+                channels_map = parse_markdown_channels(content)
+
+                for name, ch_data in channels_map.items():
+                    name_lower = name.lower().strip()
+                    if name_lower:
+                        # Only add fields that don't exist yet (first URL wins)
+                        if name_lower not in metadata_map:
+                            metadata_map[name_lower] = {}
+
+                        # Update only if field is empty
+                        if not metadata_map[name_lower].get('name'):
+                            metadata_map[name_lower]['name'] = ch_data.get('name', '')
+                        if not metadata_map[name_lower].get('tvg_id') and ch_data.get('tvg_id'):
+                            metadata_map[name_lower]['tvg_id'] = ch_data.get('tvg_id', '')
+
+                        parsed_count += 1
+
+                url_stats.append({
+                    'url': original_url,
+                    'format': 'Markdown',
+                    'parsed': len(channels_map)
+                })
+
+            else:
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: Unknown - skipping")
+                url_stats.append({
+                    'url': original_url,
+                    'format': 'Unknown',
+                    'parsed': 0
+                })
+
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Parsed: {parsed_count} entries")
+
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Error processing URL: {str(e)}")
+            url_stats.append({
+                'url': original_url,
+                'format': 'Error',
+                'parsed': 0,
+                'error': str(e)
+            })
+            continue
+
+    # Match and update existing channels by name
+    matched_count = 0
+    updated_count = 0
+    matched_names = set()
+
+    for ip, channel in tv_channels.items():
+        channel_name = channel.get('name', '').lower().strip()
+
+        if channel_name and channel_name in metadata_map:
+            matched_count += 1
+            matched_names.add(channel_name)
+            metadata = metadata_map[channel_name]
+
+            # Track if any field was actually updated
+            updated = False
+            updated_fields = []
+
+            # Update logo
+            if metadata.get('logo') and metadata['logo'] != channel.get('logo', ''):
+                channel['logo'] = metadata['logo']
+                updated = True
+                updated_fields.append('logo')
+
+            # Update catchup
+            if metadata.get('catchup') and metadata['catchup'] != channel.get('catchup', ''):
+                channel['catchup'] = metadata['catchup']
+                updated = True
+                updated_fields.append('catchup')
+
+            # Update playback (catchup-source)
+            if metadata.get('playback') and metadata['playback'] != channel.get('playback', ''):
+                channel['playback'] = metadata['playback']
+                updated = True
+                updated_fields.append('playback')
+
+            # Update tvg_id
+            if metadata.get('tvg_id') and metadata['tvg_id'] != channel.get('tvg_id', ''):
+                channel['tvg_id'] = metadata['tvg_id']
+                updated = True
+                updated_fields.append('tvg_id')
+
+            if updated:
+                updated_count += 1
+                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Updated channel '{channel.get('name')}' ({ip}): {', '.join(updated_fields)}")
+
+    # Save updated channels to database
+    save_channels()
+
+    # Print unmatched channels from metadata
+    unmatched_from_url = set(metadata_map.keys()) - matched_names
+    if unmatched_from_url:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Unmatched channels in metadata (not in local): {len(unmatched_from_url)}")
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Metadata sync completed: {matched_count} matched, {updated_count} updated")
+
+    return {
+        "urls_processed": len(metadata_urls),
+        "url_stats": url_stats,
+        "total_metadata": len(metadata_map),
+        "matched": matched_count,
+        "updated": updated_count,
+        "unmatched": len(tv_channels) - matched_count
+    }
+
+
+def scheduled_sync_metadata():
+    """Scheduled task to sync metadata from online sources"""
+    try:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Running metadata sync")
+
+        # Load config to get metadata source URL(s)
+        config = load_config()
+        metadata_urls_str = config.get('metadata_source_url', '')
+
+        if not metadata_urls_str:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] No metadata source URL configured")
+            return
+
+        # Split multiple URLs
+        metadata_urls = [url.strip() for url in metadata_urls_str.replace('\n', ',').split(',') if url.strip()]
+
+        if not metadata_urls:
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] No valid URLs found")
+            return
+
+        # Call the core sync logic
+        result = sync_metadata_core(metadata_urls)
+
+        # Update last run time in config
+        config = load_config()
+        if 'scheduled_tasks' not in config:
+            config['scheduled_tasks'] = {}
+        if 'sync_metadata' not in config['scheduled_tasks']:
+            config['scheduled_tasks']['sync_metadata'] = {}
+        config['scheduled_tasks']['sync_metadata']['last_run'] = datetime.now().isoformat()
+        save_config(config)
+
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Metadata sync completed: {result['matched']} matched, {result['updated']} updated")
+
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Scheduled] Error in metadata sync: {str(e)}")
+
+
+def init_scheduled_tasks():
+    """Initialize scheduled tasks based on configuration"""
+    try:
+        config = load_config()
+        scheduled_tasks_config = config.get('scheduled_tasks', {})
+
+        # Initialize test connectivity task
+        test_connectivity_config = scheduled_tasks_config.get('test_connectivity', {})
+        if test_connectivity_config.get('enabled', False):
+            interval_hours = test_connectivity_config.get('interval_hours', 24)
+
+            # Remove existing job if any
+            if scheduler.get_job('test_connectivity'):
+                scheduler.remove_job('test_connectivity')
+
+            # Add new job
+            scheduler.add_job(
+                func=scheduled_test_connectivity,
+                trigger=IntervalTrigger(hours=interval_hours),
+                id='test_connectivity',
+                name='Test Channels Connectivity',
+                replace_existing=True
+            )
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Scheduled task 'test_connectivity' initialized (interval: {interval_hours} hours)")
+        else:
+            # Remove job if disabled
+            if scheduler.get_job('test_connectivity'):
+                scheduler.remove_job('test_connectivity')
+
+        # Initialize sync metadata task
+        sync_metadata_config = scheduled_tasks_config.get('sync_metadata', {})
+        if sync_metadata_config.get('enabled', False):
+            interval_hours = sync_metadata_config.get('interval_hours', 168)
+
+            # Remove existing job if any
+            if scheduler.get_job('sync_metadata'):
+                scheduler.remove_job('sync_metadata')
+
+            # Add new job
+            scheduler.add_job(
+                func=scheduled_sync_metadata,
+                trigger=IntervalTrigger(hours=interval_hours),
+                id='sync_metadata',
+                name='Sync Channels Metadata',
+                replace_existing=True
+            )
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Scheduled task 'sync_metadata' initialized (interval: {interval_hours} hours)")
+        else:
+            # Remove job if disabled
+            if scheduler.get_job('sync_metadata'):
+                scheduler.remove_job('sync_metadata')
+
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Error initializing scheduled tasks: {str(e)}")
 
 
 def load_channels():
@@ -795,6 +1191,57 @@ def handle_config():
         return jsonify({"status": "success", "config": config})
 
 
+@app.route('/api/scheduled-tasks', methods=['GET', 'POST'])
+def handle_scheduled_tasks():
+    """Get or update scheduled tasks configuration"""
+    if request.method == 'GET':
+        config = load_config()
+        scheduled_tasks = config.get('scheduled_tasks', {
+            'test_connectivity': {
+                'enabled': False,
+                'interval_hours': 24,
+                'last_run': None
+            },
+            'sync_metadata': {
+                'enabled': False,
+                'interval_hours': 168,
+                'last_run': None
+            }
+        })
+        return jsonify(scheduled_tasks)
+
+    elif request.method == 'POST':
+        try:
+            # Load existing config
+            config = load_config()
+
+            # Get scheduled tasks data from request
+            scheduled_tasks_data = request.json
+
+            # Update scheduled_tasks in config
+            if 'scheduled_tasks' not in config:
+                config['scheduled_tasks'] = {}
+
+            config['scheduled_tasks'].update(scheduled_tasks_data)
+
+            # Save config
+            save_config(config)
+
+            # Re-initialize scheduled tasks with new configuration
+            init_scheduled_tasks()
+
+            return jsonify({
+                "status": "success",
+                "message": "Scheduled tasks configuration updated",
+                "scheduled_tasks": config['scheduled_tasks']
+            })
+
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to update scheduled tasks: {str(e)}"
+            }), 500
+
 
 @app.route('/api/test/start', methods=['POST'])
 def start_test():
@@ -1490,8 +1937,6 @@ def import_channels():
 @app.route('/api/metadata/sync', methods=['POST'])
 def sync_metadata():
     """Sync metadata from multiple online sources (M3U, Markdown) by matching channel names"""
-    global tv_channels
-
     try:
         # Load config to get metadata source URL(s)
         config = load_config()
@@ -1506,196 +1951,17 @@ def sync_metadata():
         if not metadata_urls:
             return jsonify({"status": "error", "message": "No valid URLs found"}), 400
 
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting metadata sync from {len(metadata_urls)} URL(s)")
-
-        # Merged metadata map: {channel_name_lower: {logo, catchup, playback, tvg_id, ...}}
-        metadata_map = {}
-        url_stats = []  # Track stats for each URL
-
-        # Process each URL
-        for url_index, metadata_url in enumerate(metadata_urls, 1):
-            try:
-                # Convert GitHub URL to raw URL if needed
-                original_url = metadata_url
-                if 'github.com' in metadata_url and '/blob/' in metadata_url:
-                    metadata_url = metadata_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
-
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{url_index}/{len(metadata_urls)}] Downloading from: {metadata_url}")
-
-                # Download content
-                response = requests.get(metadata_url, timeout=30)
-                response.raise_for_status()
-                content = response.text
-
-                # Skip XML files (EPG data)
-                if '.xml' in metadata_url.lower():
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: XML (EPG) - skipping metadata sync")
-                    url_stats.append({
-                        'url': original_url,
-                        'format': 'XML (EPG)',
-                        'parsed': 0
-                    })
-                    continue
-
-                # Detect format: M3U or Markdown
-                is_m3u = False
-                is_markdown = False
-
-                # Check by URL extension
-                if '.m3u' in metadata_url.lower() or '.m3u8' in metadata_url.lower():
-                    is_m3u = True
-                elif '.md' in metadata_url.lower() or 'readme' in metadata_url.lower():
-                    is_markdown = True
-                else:
-                    # Detect by content
-                    if '#EXTINF' in content or '#EXTM3U' in content:
-                        is_m3u = True
-                    elif re.search(r'.+?[：:]\s*\d+', content):  # Pattern: "name: number"
-                        is_markdown = True
-
-                # Parse based on detected format
-                parsed_count = 0
-                if is_m3u:
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: M3U")
-                    parsed_channels = parse_m3u(content)
-
-                    for ch in parsed_channels:
-                        name_lower = ch['name'].lower().strip()
-                        if name_lower:
-                            # Only add fields that don't exist yet (first URL wins)
-                            if name_lower not in metadata_map:
-                                metadata_map[name_lower] = {}
-
-                            # Update only if field is empty
-                            if not metadata_map[name_lower].get('name'):
-                                metadata_map[name_lower]['name'] = ch.get('name', '')
-                            if not metadata_map[name_lower].get('logo') and ch.get('logo'):
-                                metadata_map[name_lower]['logo'] = ch.get('logo', '')
-                            if not metadata_map[name_lower].get('catchup') and ch.get('catchup'):
-                                metadata_map[name_lower]['catchup'] = ch.get('catchup', '')
-                            if not metadata_map[name_lower].get('playback') and ch.get('playback'):
-                                metadata_map[name_lower]['playback'] = ch.get('playback', '')
-                            if not metadata_map[name_lower].get('tvg_id') and ch.get('tvg_id'):
-                                metadata_map[name_lower]['tvg_id'] = ch.get('tvg_id', '')
-                            if not metadata_map[name_lower].get('group') and ch.get('group'):
-                                metadata_map[name_lower]['group'] = ch.get('group', '')
-
-                            parsed_count += 1
-
-                    url_stats.append({
-                        'url': original_url,
-                        'format': 'M3U',
-                        'parsed': len(parsed_channels)
-                    })
-
-                elif is_markdown:
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: Markdown")
-                    channels_map = parse_markdown_channels(content)
-
-                    for name, ch_data in channels_map.items():
-                        name_lower = name.lower().strip()
-                        if name_lower:
-                            # Only add fields that don't exist yet (first URL wins)
-                            if name_lower not in metadata_map:
-                                metadata_map[name_lower] = {}
-
-                            # Update only if field is empty
-                            if not metadata_map[name_lower].get('name'):
-                                metadata_map[name_lower]['name'] = ch_data.get('name', '')
-                            if not metadata_map[name_lower].get('tvg_id') and ch_data.get('tvg_id'):
-                                metadata_map[name_lower]['tvg_id'] = ch_data.get('tvg_id', '')
-
-                            parsed_count += 1
-
-                    url_stats.append({
-                        'url': original_url,
-                        'format': 'Markdown',
-                        'parsed': len(channels_map)
-                    })
-
-                else:
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Format: Unknown - skipping")
-                    url_stats.append({
-                        'url': original_url,
-                        'format': 'Unknown',
-                        'parsed': 0
-                    })
-
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Parsed: {parsed_count} entries")
-
-            except Exception as e:
-                print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]   Error processing URL: {str(e)}")
-                url_stats.append({
-                    'url': original_url,
-                    'format': 'Error',
-                    'parsed': 0,
-                    'error': str(e)
-                })
-                continue
-
-        # Match and update existing channels by name
-        matched_count = 0
-        updated_count = 0
-        matched_names = set()
-
-        for ip, channel in tv_channels.items():
-            channel_name = channel.get('name', '').lower().strip()
-
-            if channel_name and channel_name in metadata_map:
-                matched_count += 1
-                matched_names.add(channel_name)
-                metadata = metadata_map[channel_name]
-
-                # Track if any field was actually updated
-                updated = False
-                updated_fields = []
-
-                # Update logo
-                if metadata.get('logo') and metadata['logo'] != channel.get('logo', ''):
-                    channel['logo'] = metadata['logo']
-                    updated = True
-                    updated_fields.append('logo')
-
-                # Update catchup
-                if metadata.get('catchup') and metadata['catchup'] != channel.get('catchup', ''):
-                    channel['catchup'] = metadata['catchup']
-                    updated = True
-                    updated_fields.append('catchup')
-
-                # Update playback (catchup-source)
-                if metadata.get('playback') and metadata['playback'] != channel.get('playback', ''):
-                    channel['playback'] = metadata['playback']
-                    updated = True
-                    updated_fields.append('playback')
-
-                # Update tvg_id (NEW)
-                if metadata.get('tvg_id') and metadata['tvg_id'] != channel.get('tvg_id', ''):
-                    channel['tvg_id'] = metadata['tvg_id']
-                    updated = True
-                    updated_fields.append('tvg_id')
-
-                if updated:
-                    updated_count += 1
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Updated channel '{channel.get('name')}' ({ip}): {', '.join(updated_fields)}")
-
-        # Save updated channels to database
-        save_channels()
-
-        # Print unmatched channels from metadata
-        unmatched_from_url = set(metadata_map.keys()) - matched_names
-        if unmatched_from_url:
-            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Unmatched channels in metadata (not in local): {len(unmatched_from_url)}")
-
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Metadata sync completed: {matched_count} matched, {updated_count} updated")
+        # Call the core sync logic
+        result = sync_metadata_core(metadata_urls)
 
         return jsonify({
             "status": "success",
-            "urls_processed": len(metadata_urls),
-            "url_stats": url_stats,
-            "total_metadata": len(metadata_map),
-            "matched": matched_count,
-            "updated": updated_count,
-            "unmatched": len(tv_channels) - matched_count
+            "urls_processed": result["urls_processed"],
+            "url_stats": result["url_stats"],
+            "total_metadata": result["total_metadata"],
+            "matched": result["matched"],
+            "updated": result["updated"],
+            "unmatched": result["unmatched"]
         })
 
     except Exception as e:
@@ -2741,6 +3007,9 @@ if __name__ == '__main__':
     test_results = load_results()
     tv_channels = load_channels()
     groups = load_groups()
+
+    # Initialize scheduled tasks
+    init_scheduled_tasks()
 
     print(f"\n{'='*60}")
     print(f"IPTV Stream Sniffer Server")
