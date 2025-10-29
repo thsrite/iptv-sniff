@@ -122,6 +122,9 @@ const translations = {
 
         // AI Settings
         aiConfiguration: 'AI模型配置',
+        aiModelRequirement: '重要提示：',
+        aiModelRequirementText: 'AI 识别功能需要使用支持 Vision Language Model (VLM) 的模型，如 GPT-4 Vision、Claude 3 (Opus/Sonnet)、Gemini Pro Vision 等具备图像识别能力的多模态模型。',
+        aiModelExamples: '推荐模型：',
         enableAi: '启用AI频道识别',
         enableAiHint: '启用AI模型自动从截图识别频道名称',
         aiApiUrl: 'AI API URL',
@@ -301,6 +304,9 @@ const translations = {
 
         // AI Settings
         aiConfiguration: 'AI Model Configuration',
+        aiModelRequirement: 'Important Notice:',
+        aiModelRequirementText: 'AI recognition requires Vision Language Models (VLM) that support image understanding, such as GPT-4 Vision, Claude 3 (Opus/Sonnet), Gemini Pro Vision, and other multimodal models with image recognition capabilities.',
+        aiModelExamples: 'Recommended Models:',
         enableAi: 'Enable AI Channel Recognition',
         enableAiHint: 'Enable AI model to automatically recognize channel names from screenshots',
         aiApiUrl: 'AI API URL',

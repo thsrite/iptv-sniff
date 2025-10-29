@@ -7,6 +7,7 @@ import copy
 import base64
 import requests
 import sys
+import logging
 from datetime import datetime
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -3020,9 +3021,16 @@ def recognize_channels():
                         "max_tokens": 20
                     }
 
+                # Build full API URL
+                api_url = ai_config['api_url']
+                # Auto-append /chat/completions if not present (for OpenAI-compatible APIs)
+                if 'anthropic' not in api_url.lower():
+                    if not api_url.endswith('/chat/completions') and not api_url.endswith('/v1/messages'):
+                        api_url = api_url.rstrip('/') + '/chat/completions'
+
                 # Send request to AI model
-                print(f"[AI Recognition] Sending request for IP {ip}")
-                response = requests.post(ai_config['api_url'], headers=headers, json=payload, timeout=30)
+                print(f"[AI Recognition] Sending request for IP {ip} to {api_url}")
+                response = requests.post(api_url, headers=headers, json=payload, timeout=30)
 
                 if response.status_code == 200:
                     result = response.json()
@@ -3100,6 +3108,10 @@ if __name__ == '__main__':
     print(f"Loaded {len(groups)} group(s)")
     print(f"Debug mode: ON (auto-reload enabled)")
     print(f"{'='*60}\n")
+
+    # Disable Flask/Werkzeug HTTP request logs
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
 
     # Start Flask server
     app.run(host='0.0.0.0', port=9833, debug=True, threaded=True)

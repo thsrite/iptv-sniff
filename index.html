@@ -395,6 +395,22 @@
 
                     <h3 style="color: #667eea; margin-bottom: 20px;" data-i18n="aiConfiguration">AI Model Configuration</h3>
 
+                    <div class="ai-model-notice" style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); border-left: 4px solid #ffc107; padding: 15px; margin-bottom: 20px; border-radius: 6px;">
+                        <div style="display: flex; align-items: start; gap: 10px;">
+                            <span style="font-size: 20px;">⚠️</span>
+                            <div>
+                                <strong data-i18n="aiModelRequirement">重要提示：</strong>
+                                <span data-i18n="aiModelRequirementText">AI 识别功能需要使用支持 Vision Language Model (VLM) 的模型，如 GPT-4 Vision、Claude 3 (Opus/Sonnet)、Gemini Pro Vision 等具备图像识别能力的多模态模型。</span>
+                                <div style="margin-top: 8px; font-size: 0.9em; opacity: 0.9;">
+                                    <span data-i18n="aiModelExamples">推荐模型：</span>
+                                    <code style="background: rgba(0,0,0,0.1); padding: 2px 6px; border-radius: 3px; margin: 0 3px;">gpt-4-vision-preview</code>
+                                    <code style="background: rgba(0,0,0,0.1); padding: 2px 6px; border-radius: 3px; margin: 0 3px;">claude-3-opus</code>
+                                    <code style="background: rgba(0,0,0,0.1); padding: 2px 6px; border-radius: 3px; margin: 0 3px;">gemini-pro-vision</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label for="ai-enabled">
                             <input type="checkbox" id="ai-enabled" style="margin-right: 8px;">
